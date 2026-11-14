@@ -1,4 +1,4 @@
-//! Point d'entrée : échantillonnage 1 Hz, overlay affiché uniquement en jeu.
+//! Point d'entrée : icône de notification, réglages, overlay affiché en jeu.
 
 use std::thread;
 use std::time::{Duration, Instant};
@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use ovl_core::games::GameProbe;
 use ovl_core::{Sampler, Stats};
 use ovl_overlay::{Overlay, OverlayConfig};
+use ovl_platform::Config;
 
 fn main() {
     env_logger::init();
@@ -19,11 +20,14 @@ fn main() {
     };
     overlay.hide();
 
+    let _tray = ovl_platform::tray::create();
+
     let mut sampler = Sampler::new();
     sampler.sample(); // amorce PDH
-
     let mut game_probe = GameProbe::new();
-    let forced = std::env::var("OVL_FORCE").is_ok();
+
+    let mut config = Config::load();
+    overlay.set_scale(config.scale);
 
     let mut last = Instant::now() - Duration::from_secs(2);
     let mut visible = false;
@@ -39,10 +43,22 @@ fn main() {
         }
         last = Instant::now();
 
+        // les réglages écrivent le fichier : on le relit à chaque tick (coût négligeable)
+        config = Config::load();
+        overlay.set_scale(config.scale);
+
+        if !config.show_stats {
+            if visible {
+                overlay.hide();
+                visible = false;
+            }
+            continue;
+        }
+
         let stats = sampler.sample();
         let pid = ovl_core::games::foreground_pid();
         let usage = game_probe.as_mut().map(|p| p.usage(pid)).unwrap_or(0.0);
-        let in_game = forced || usage >= 3.0;
+        let in_game = config.always_show || usage >= 3.0;
 
         if in_game {
             if !visible {
@@ -56,19 +72,17 @@ fn main() {
             visible = false;
         }
     }
+
+    ovl_platform::tray::destroy();
 }
 
-/// Lignes affichées (label, valeur), dans l'ordre du panneau.
+/// Lignes affichées (label, valeur).
 fn rows(stats: &Stats) -> Vec<(String, String)> {
     let percent = |value: Option<f32>| {
-        value
-            .map(|v| format!("{:.0}%", v * 100.0))
-            .unwrap_or_else(|| "—".to_string())
+        value.map(|v| format!("{:.0}%", v * 100.0)).unwrap_or_else(|| "—".to_string())
     };
     let celsius = |value: Option<f32>| {
-        value
-            .map(|v| format!("{v:.0}°C"))
-            .unwrap_or_else(|| "—".to_string())
+        value.map(|v| format!("{v:.0}°C")).unwrap_or_else(|| "—".to_string())
     };
 
     vec![

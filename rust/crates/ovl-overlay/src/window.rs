@@ -100,6 +100,17 @@ impl Overlay {
         self.ctx.paint(lines);
     }
 
+    /// Change l'échelle du panneau (reconstruit les polices).
+    pub fn set_scale(&mut self, scale: f32) {
+        if (self.config.scale - scale).abs() < 0.01 {
+            return;
+        }
+        self.config.scale = scale;
+        if let Some(ctx) = PaintCtx::new(self.hwnd, scale) {
+            self.ctx = ctx;
+        }
+    }
+
     pub fn hide(&mut self) {
         unsafe { let _ = ShowWindow(self.hwnd, SW_HIDE); }
     }
