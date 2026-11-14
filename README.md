@@ -102,5 +102,5 @@ build\build-installer.ps1     # → dist\FPS-Counter-Crosshair-Pro-Setup.exe
 ## Notes
 
 - Compatible Windows 11 x64 (le paquet d'origine cible `Windows.Desktop 10.0.17763`).
-- Aucune collecte : les seuls accès réseau sont le store Microsoft (licence), Sentry (rapports
-  de plantage, désactivables) et l'écho ICMP du ping.
+- Aucune collecte : les seuls accès réseau sont le Microsoft Store (mises à jour), Sentry
+  (rapports de plantage, désactivables) et l'écho ICMP du ping.
