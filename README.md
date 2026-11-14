@@ -104,3 +104,21 @@ build\build-installer.ps1     # → dist\FPS-Counter-Crosshair-Pro-Setup.exe
 - Compatible Windows 11 x64 (le paquet d'origine cible `Windows.Desktop 10.0.17763`).
 - Aucune collecte : les seuls accès réseau sont le Microsoft Store (mises à jour), Sentry
   (rapports de plantage, désactivables) et l'écho ICMP du ping.
+## Détection de jeu
+
+L'overlay ne s'affiche que lorsqu'un jeu tourne réellement au premier plan.
+
+```
+GameWatch.exe  (au logon, sans fenêtre)
+  └─ compteurs PDH  \GPU Engine(*)\Utilization Percentage
+       └─ instances  pid_<PID>_..._engtype_3D  → PID des processus qui rendent en 3D
+            └─ C:\ProgramData\OverlayTemp\gpu_pids.txt   (PIDs actifs, seuil 3 %)
+```
+
+`Sessions.IsGame()` combine trois signaux :
+1. liste noire d'exécutables non-jeux (navigateurs, Discord, VLC, explorateur…),
+2. activité 3D réelle du processus au premier plan (`gpu_pids.txt`),
+3. présence d'images composées par DWM pour ce processus + plein écran ou profil dédié.
+
+`OverlayHost.Draw()` n'affiche le panneau que si l'état « en jeu » est actif (fenêtre de grâce
+de 5 s à la sortie), donc plus rien sur le bureau ni dans les applications classiques.

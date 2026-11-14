@@ -7,6 +7,7 @@ Overlay de performance et réticule pour Windows 11.
 - Charge CPU/GPU, fréquences, VRAM, RAM, températures
 - **Température CPU via le SDK AMD** (`Platform.dll!GetRmCpuParameters`) — aucun pilote tiers
 - Dix réticules + éditeur, profils, thèmes, alertes, ping
+- **Détection de jeu** : l'overlay ne s'affiche que lorsqu'un jeu tourne au premier plan (compteurs GPU Engine 3D + liste noire + images DWM), plus rien sur le bureau
 - Quatre dispositions, position/opacité/échelle réglables, raccourcis globaux
 
 ### Installation
@@ -18,4 +19,4 @@ Overlay de performance et réticule pour Windows 11.
 Applications → FPS Counter & Crosshair.
 
 ### SHA256
-`BA1DDEF9804C2A9F22D9B8549F4F4A51A6645D7775A89C0CBF5C693DF1FA2AB9`
+`à recalculer`
