@@ -103,15 +103,47 @@ Binaires secondaires : `probe.exe` (dump JSON des stats), `sensor.exe` (capteur 
 
 ## 3. Ce que fait l'application Rust aujourd'hui
 
-- **HUD translucide**, positionné en haut à droite du moniteur de la fenêtre active, click-through,
-  topmost, sans vol de focus. Affiché **uniquement si un jeu rend réellement en 3D** au premier plan
-  (compteurs `\GPU Engine(*)\engtype_3d` du PID, seuil 3 %).
-- **Mesures** : CPU %, température CPU (AMD), GPU %, RAM. FPS et température GPU encore à `—`.
-- **Icône de notification** : clic simple → réglages ; clic droit → menu (Réglages, Afficher,
-  Toujours afficher, Quitter).
-- **Interface** : clone de l'original (barre latérale Overlay/Réticule/Profils/Rapports,
-  Aide/Pro/Paramètres, cartes, toggle animé, aperçu, dispositions, thèmes, police Segoe UI Variable).
-  Tout ce qui touche l'overlay est **fonctionnel** (écrit `config.json`, relu à chaud chaque seconde).
+- **HUD** click-through, topmost, sans vol de focus, sur le moniteur de la fenêtre active, dans le
+  coin choisi. Affiché **uniquement si un jeu rend réellement en 3D** au premier plan
+  (compteurs `\GPU Engine(*)\engtype_3d` du PID, seuil 3 %), ou en permanence (« Afficher hors jeu »).
+  Taille × échelle Windows du moniteur appliquées à la fenêtre et aux polices.
+- **Rendu** : alpha par pixel (`UpdateLayeredWindow`) : fond à l'opacité choisie, texte opaque,
+  thème Transparent avec ombre.
+- **Dispositions** : Panneau, Ligne, Graphique (panneau + courbe des temps d'image).
+  **10 thèmes** : Graphite, Clair, Contraste élevé, Transparent, Vert, Ambre, Cyan, Rose, Violet,
+  Corail. Couleur du texte personnalisable. Coin, distances horizontale et verticale, taille, opacité.
+- **19 mesures au choix** (une mesure sans valeur n'apparaît pas) :
+
+  | Mesure | Source |
+  |---|---|
+  | FPS, temps d'image, lows 1 % / 0,1 % (10 s), courbe | ETW temps réel : DXGI `Present` (42, 55), DxgKrnl `PresentHistory` (171, 215) |
+  | Charge CPU, chaque cœur, fréquence | PDH `Processor Information` (`% Processor Utility`, `% Processor Performance` × `Processor Frequency`) |
+  | Température CPU | SDK AMD via `sensor.exe` (ignorée si publiée depuis plus de 10 s) |
+  | Charge GPU | PDH `GPU Engine(*)`, moteur le plus occupé |
+  | Température GPU (+ ventilateur) | `D3DKMTQueryAdapterInfo(ADAPTERPERFDATA)` : valeur du pilote AMD Adrenalin |
+  | Mémoire GPU, mémoire GPU du jeu | PDH `GPU Adapter Memory` / `GPU Process Memory` (PID) + DXGI |
+  | RAM | `GlobalMemoryStatusEx` |
+  | Activité et débit disque | PDH `PhysicalDisk` |
+  | Ping, perte, gigue | ICMP (`IcmpSendEcho`) chaque seconde, fenêtre de 60 s, hôte réglable |
+  | Connexion, barres Wi-Fi, débit du lien | WinRT `NetworkInformation` |
+  | Trafic en arrière-plan | ETW `Microsoft-Windows-Winsock-AFD` (octets par processus, hors jeu) |
+  | Horloge | `GetLocalTime` |
+
+  ETW exige d'être administrateur ou membre de « Utilisateurs du journal de performances »
+  (c'est le cas de ce compte) ; sinon les réglages l'expliquent.
+- **Alertes** (page dédiée) : FPS sous un seuil, températures CPU/GPU, ping, perte/gigue, trafic en
+  arrière-plan, Wi-Fi faible. Ligne rouge clignotante dans le HUD, pop-up en haut de l'écran, ou
+  les deux. Les alertes soutenues attendent 3 s.
+- **Raccourci global** Alt+Maj+O : affiche / masque le HUD.
+- **Icône de notification** : clic → réglages ; clic droit → menu (Réglages, Afficher le HUD,
+  Afficher hors jeu, Quitter). Réenregistrée si l'Explorateur redémarre.
+- **Réglages** (egui) : pages Overlay (état, aperçu réel, affichage, thèmes avec vos valeurs,
+  mesures, position et taille, état des capteurs), Alertes, et Paramètres (démarrage, état de l'overlay, dossier de config). Clavier et lecteur d'écran
+  (AccessKit). Instance unique.
+- **Fichiers partagés** dans `%LOCALAPPDATA%\FPSOverlayRust\` : `config.json` (écrit par
+  remplacement atomique, champ par champ), `status.json` (publié par l'overlay chaque seconde),
+  `overlay.log`.
+- Audit UI/UX : `repo/anti-slop/audit-001-2026-11-14.md`.
 
 ### Mesures
 
@@ -156,13 +188,15 @@ Copier ensuite `target\release\{overlay,sensor,settings}.exe` dans
 | Panneau effacé chaque seconde | `SetWindowPos` à chaque tick | repositionnement seulement si la cible change |
 | Température CPU absente | `sensor.exe` arrêté | `schtasks /run /tn FPSOverlaySensor` |
 | Réglages ne s'ouvrent pas | `settings.exe` absent du dossier | recopier le binaire |
+| FPS absents, « accès refusé » (ETW) ou réseau « inconnu » en lançant depuis `target\release` | le dossier de build hérite d'une étiquette d'intégrité **faible** : le .exe tourne en intégrité basse | lancer la copie installée dans `%LOCALAPPDATA%\Programs\FPSOverlayRust` |
+| FPS absents pour une appli Electron/navigateur | les images sont présentées par un processus GPU séparé, pas par celui de la fenêtre | normal ; les jeux présentent depuis leur propre processus |
+| Diagnostic de toutes les sources | — | `probe.exe [secondes] [hôte]` (compilé avec `-p ovl-core`), copié hors de `target` |
 
 ---
 
 ## 6. Reste à faire
 
-1. **FPS via ETW** (`Microsoft-Windows-DXGI` / `DxgKrnl` Present) dans `sensor.exe` — seule métrique encore vide.
-2. **Température GPU** (`D3DKMT ADAPTER_PERFDATA`).
-3. **Transparence par pixel** (aujourd'hui translucidité uniforme via `LWA_ALPHA`).
-4. Pages **Réticule**, **Profils**, **Rapports** de l'interface.
-5. Installeur Rust (.exe) + désinstallation propre de l'app d'origine quand la parité sera atteinte.
+1. Pages **Réticule**, **Profils**, **Rapports** de l'interface (affichées « Bientôt »).
+2. Icône dédiée pour la zone de notification (aujourd'hui l'icône générique de Windows).
+3. Ping en IPv6 (aujourd'hui IPv4 seulement).
+4. Installeur Rust (.exe) + désinstallation propre de l'app d'origine quand la parité sera atteinte.

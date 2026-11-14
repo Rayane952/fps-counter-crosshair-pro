@@ -1,7 +1,6 @@
-//! Overlay : fenêtre layered click-through + rendu Direct2D/DirectWrite.
+//! Overlay : fenêtres layered click-through (HUD, pop-up d'alerte) + rendu GDI à alpha par pixel.
 
 mod painter;
 mod window;
 
-pub use painter::Theme;
-pub use window::{Overlay, OverlayConfig};
+pub use window::{HudSettings, Overlay, Pumped};

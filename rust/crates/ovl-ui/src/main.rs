@@ -1,514 +1,291 @@
 #![windows_subsystem = "windows"]
 
-//! Réglages — clone de l'interface d'origine, réécrit en Rust (egui).
+//! Réglages de FPS Overlay (egui).
 
-use std::path::PathBuf;
-use std::process::Command;
+mod live;
+mod page_alerts;
+mod page_overlay;
+mod pages;
+mod preview;
+mod tokens;
+mod widgets;
 
-use eframe::egui;
-use egui::{
-    Align, Color32, FontId, Layout, Margin, Mesh, Rect, RichText, Rounding, Sense, Stroke, Vec2,
-};
-use ovl_platform::Config;
+use std::time::{Duration, Instant};
 
-const BG: Color32 = Color32::from_rgb(0x1B, 0x1B, 0x1F);
-const SIDEBAR: Color32 = Color32::from_rgb(0x17, 0x17, 0x1B);
-const CARD: Color32 = Color32::from_rgb(0x23, 0x23, 0x29);
-const CARD_SOFT: Color32 = Color32::from_rgb(0x1F, 0x2A, 0x33);
-const ACCENT: Color32 = Color32::from_rgb(0x4C, 0x9A, 0xFF);
-const TEXT: Color32 = Color32::from_rgb(0xEC, 0xEC, 0xF1);
-const DIM: Color32 = Color32::from_rgb(0x98, 0x98, 0xA4);
+use eframe::egui::{self, Align, Layout, Margin, RichText};
+use ovl_platform::config::LoadIssue;
+use ovl_platform::{single_instance, Config};
+use tokens::*;
+use widgets::Tone;
+
+const TITLE: &str = "FPS Overlay · Réglages";
+/// Les autres processus (icône, raccourci) modifient aussi config.json.
+const CONFIG_REFRESH: Duration = Duration::from_secs(1);
+const AUTOSTART_REFRESH: Duration = Duration::from_secs(3);
+const FEEDBACK_FOR: Duration = Duration::from_secs(6);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Page {
     Overlay,
-    Reticule,
-    Profils,
-    Rapports,
-    Parametres,
+    Alerts,
+    Settings,
 }
 
-struct App {
+struct Feedback {
+    tone: Tone,
+    text: String,
+    at: Instant,
+}
+
+pub(crate) struct App {
     page: Page,
     config: Config,
-    dirty: bool,
-    decorated: bool,
-    layout: usize,
-    theme: usize,
+    config_issue: Option<LoadIssue>,
+    config_read: Instant,
+    autostart: bool,
+    autostart_read: Instant,
+    live: live::Shared,
+    feedback: Option<Feedback>,
+    title_bar_done: bool,
+    /// Saisie en cours de l'hôte du ping (enregistrée à la perte du focus).
+    ping_draft: String,
 }
-
-const LAYOUTS: [&str; 3] = ["Panneau", "Ligne", "Graphique"];
 
 impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        style(&cc.egui_ctx);
+        tokens::apply(&cc.egui_ctx);
+        live::repair_autostart();
+        let (config, config_issue) = Config::load_checked();
         Self {
+            ping_draft: config.ping_host.clone(),
             page: Page::Overlay,
-            config: Config::load(),
-            dirty: false,
-            decorated: false,
-            layout: 0,
-            theme: 2,
+            config,
+            config_issue,
+            config_read: Instant::now(),
+            autostart: live::autostart_enabled(),
+            autostart_read: Instant::now(),
+            live: live::start(cc.egui_ctx.clone()),
+            feedback: None,
+            title_bar_done: false,
         }
     }
 
-    fn store(&mut self) {
-        self.config.save();
-        self.dirty = false;
+    pub(crate) fn flash(&mut self, tone: Tone, text: String) {
+        self.feedback = Some(Feedback {
+            tone,
+            text,
+            at: Instant::now(),
+        });
     }
-}
 
-fn load_system_font(ctx: &egui::Context) {
-    let candidates = [
-        r"C:\Windows\Fonts\SegUIVar.ttf",
-        r"C:\Windows\Fonts\segoeui.ttf",
-    ];
-    for path in candidates {
-        if let Ok(bytes) = std::fs::read(path) {
-            let mut fonts = egui::FontDefinitions::default();
-            fonts.font_data.insert("ui".to_owned(), egui::FontData::from_owned(bytes));
-            fonts.families.get_mut(&egui::FontFamily::Proportional).unwrap().insert(0, "ui".to_owned());
-            fonts.families.get_mut(&egui::FontFamily::Monospace).unwrap().insert(0, "ui".to_owned());
-            ctx.set_fonts(fonts);
-            return;
+    /// Enregistre un changement : relit le fichier, n'applique que la différence, réécrit.
+    pub(crate) fn set_config(&mut self, wanted: Config) {
+        let result = Config::update(|disk| {
+            let before = self.config.clone();
+            macro_rules! sync {
+                ($($field:ident),*) => { $( if wanted.$field != before.$field { disk.$field = wanted.$field.clone(); } )* };
+            }
+            sync!(
+                show_stats,
+                always_show,
+                stats,
+                scale,
+                margin_x,
+                margin_y,
+                opacity,
+                corner,
+                layout,
+                theme,
+                text_color,
+                ping_host,
+                alerts
+            );
+        });
+        match result {
+            Ok(config) => {
+                self.config = config;
+                self.config_issue = None;
+                self.config_read = Instant::now();
+            }
+            Err(err) => self.flash(Tone::Error, format!("Réglage non enregistré : {err}.")),
         }
     }
-}
 
-fn style(ctx: &egui::Context) {
-    load_system_font(ctx);
-    let mut visuals = egui::Visuals::dark();
-    visuals.panel_fill = BG;
-    visuals.window_fill = BG;
-    visuals.extreme_bg_color = CARD;
-    visuals.override_text_color = Some(TEXT);
-    visuals.widgets.inactive.bg_fill = CARD;
-    visuals.widgets.inactive.weak_bg_fill = CARD;
-    visuals.widgets.hovered.bg_fill = Color32::from_rgb(0x2E, 0x2E, 0x36);
-    visuals.widgets.active.bg_fill = ACCENT;
-    visuals.selection.bg_fill = ACCENT.linear_multiply(0.5);
-    ctx.set_visuals(visuals);
+    pub(crate) fn refresh_autostart(&mut self) {
+        self.autostart = live::autostart_enabled();
+        self.autostart_read = Instant::now();
+    }
 
-    let mut style = (*ctx.style()).clone();
-    style.spacing.item_spacing = Vec2::new(10.0, 8.0);
-    style.text_styles = [
-        (egui::TextStyle::Heading, FontId::proportional(26.0)),
-        (egui::TextStyle::Body, FontId::proportional(14.0)),
-        (egui::TextStyle::Button, FontId::proportional(14.0)),
-        (egui::TextStyle::Small, FontId::proportional(11.5)),
-    ]
-    .into();
-    ctx.set_style(style);
+    fn sidebar(&mut self, ui: &mut egui::Ui, overlay_running: bool) {
+        ui.label(RichText::new("FPS Overlay").font(font_semibold(17.0)));
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            let (tone, text) = if overlay_running {
+                (Tone::Ok, "Overlay actif")
+            } else {
+                (Tone::Error, "Overlay arrêté")
+            };
+            widgets::status_dot(ui, tone);
+            ui.label(RichText::new(text).font(tokens::font(12.5)).color(TEXT_DIM));
+        });
+        ui.add_space(20.0);
+
+        ui.spacing_mut().item_spacing.y = 2.0;
+        for (page, label) in [
+            (Page::Overlay, "Overlay"),
+            (Page::Alerts, "Alertes"),
+            (Page::Settings, "Paramètres"),
+        ] {
+            if widgets::nav_item(ui, label, self.page == page).clicked() {
+                self.page = page;
+            }
+        }
+        ui.add_space(20.0);
+        for label in ["Réticule", "Profils", "Rapports"] {
+            widgets::nav_upcoming(ui, label);
+        }
+
+        ui.with_layout(Layout::bottom_up(Align::LEFT), |ui| {
+            ui.label(
+                RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION")))
+                    .font(tokens::font(12.0))
+                    .color(TEXT_DISABLED),
+            );
+        });
+    }
 }
 
 impl eframe::App for App {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if !self.decorated {
-            self.decorated = true;
-            dark_title_bar();
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        if !self.title_bar_done {
+            self.title_bar_done = platform::dark_title_bar(frame);
         }
+        if self.config_read.elapsed() >= CONFIG_REFRESH {
+            let (config, issue) = Config::load_checked();
+            self.config = config;
+            self.config_issue = issue;
+            self.config_read = Instant::now();
+        }
+        if self.autostart_read.elapsed() >= AUTOSTART_REFRESH {
+            self.refresh_autostart();
+        }
+        if self
+            .feedback
+            .as_ref()
+            .is_some_and(|f| f.at.elapsed() > FEEDBACK_FOR)
+        {
+            self.feedback = None;
+        }
+        // garde la relecture de config.json et l'expiration des messages même sans entrée utilisateur
+        ctx.request_repaint_after(CONFIG_REFRESH);
+
+        let snap = self.live.lock().map(|s| s.clone()).unwrap_or_default();
 
         egui::SidePanel::left("nav")
-            .exact_width(224.0)
+            .exact_width(212.0)
             .resizable(false)
-            .frame(egui::Frame::none().fill(SIDEBAR).inner_margin(Margin::symmetric(10.0, 14.0)))
-            .show(ctx, |ui| {
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    let (rect, _) = ui.allocate_exact_size(Vec2::splat(22.0), Sense::hover());
-                    ui.painter().circle_filled(rect.center(), 11.0, ACCENT.linear_multiply(0.35));
-                    ui.painter().circle_stroke(rect.center(), 5.0, Stroke::new(2.0, ACCENT));
-                    ui.add_space(2.0);
-                    ui.label(RichText::new("FPS Counter & Crosshair").size(13.0).strong());
-                    let badge = egui::Frame::none()
-                        .fill(ACCENT.linear_multiply(0.25))
-                        .rounding(Rounding::same(4.0))
-                        .inner_margin(Margin::symmetric(5.0, 1.0));
-                    badge.show(ui, |ui| ui.label(RichText::new("PRO").size(9.0).color(ACCENT)));
-                });
-                ui.add_space(16.0);
-
-                nav(ui, &mut self.page, Page::Overlay, "\u{25C8}", "Overlay");
-                nav(ui, &mut self.page, Page::Reticule, "\u{25CE}", "Réticule");
-                nav(ui, &mut self.page, Page::Profils, "\u{2630}", "Profils");
-                nav(ui, &mut self.page, Page::Rapports, "\u{25A4}", "Rapports");
-
-                ui.with_layout(Layout::bottom_up(Align::LEFT), |ui| {
-                    nav(ui, &mut self.page, Page::Parametres, "\u{2699}", "Paramètres");
-                    nav_bottom(ui, "\u{2606}", "Pro");
-                    nav_bottom(ui, "\u{003F}", "Aide");
-                });
-            });
+            .show_separator_line(false)
+            .frame(
+                egui::Frame::none()
+                    .fill(SIDEBAR)
+                    .inner_margin(Margin::symmetric(12.0, 18.0)),
+            )
+            .show(ctx, |ui| self.sidebar(ui, snap.overlay.is_some()));
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(BG).inner_margin(Margin::symmetric(22.0, 16.0)))
+            .frame(egui::Frame::none().fill(BG).inner_margin(Margin {
+                left: 32.0,
+                right: 20.0,
+                top: 24.0,
+                bottom: 0.0,
+            }))
             .show(ctx, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| match self.page {
-                    Page::Overlay => self.overlay_page(ui),
-                    Page::Reticule => self.reticule_page(ui),
-                    Page::Profils => placeholder(ui, "Profils", "Profils de disposition par jeu — étape suivante."),
-                    Page::Rapports => placeholder(ui, "Rapports", "Sessions enregistrées et exports — étape suivante."),
-                    Page::Parametres => self.settings_page(ui),
-                });
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.set_max_width(CONTENT_MAX_WIDTH);
+                        if let Some(feedback) = &self.feedback {
+                            let (tone, text) = (feedback.tone, feedback.text.clone());
+                            widgets::notice(ui, tone, &text, None);
+                        }
+                        match self.page {
+                            Page::Overlay => self.overlay_page(ui, &snap),
+                            Page::Alerts => self.alerts_page(ui, &snap),
+                            Page::Settings => self.settings_page(ui, &snap),
+                        }
+                        ui.add_space(24.0);
+                    });
             });
-
-        if self.dirty {
-            self.store();
-        }
     }
 }
 
-fn nav(ui: &mut egui::Ui, page: &mut Page, target: Page, icon: &str, label: &str) {
-    let selected = *page == target;
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 38.0), Sense::click());
-    if selected {
-        ui.painter().rect_filled(rect, Rounding::same(6.0), Color32::from_rgb(0x24, 0x24, 0x2A));
-        let bar = Rect::from_min_size(rect.min + Vec2::new(1.0, 7.0), Vec2::new(3.0, rect.height() - 14.0));
-        ui.painter().rect_filled(bar, Rounding::same(2.0), ACCENT);
-    }
-    let color = if selected { TEXT } else { DIM };
-    ui.painter().text(
-        rect.min + Vec2::new(18.0, rect.height() / 2.0),
-        egui::Align2::LEFT_CENTER,
-        icon,
-        FontId::proportional(15.0),
-        color,
-    );
-    ui.painter().text(
-        rect.min + Vec2::new(44.0, rect.height() / 2.0),
-        egui::Align2::LEFT_CENTER,
-        label,
-        FontId::proportional(14.0),
-        color,
-    );
-    if response.clicked() {
-        *page = target;
-    }
-}
+mod platform {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        FindWindowW, SetForegroundWindow, ShowWindow, SW_RESTORE,
+    };
 
-fn nav_bottom(ui: &mut egui::Ui, icon: &str, label: &str) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 32.0), Sense::click());
-    ui.painter().text(
-        rect.min + Vec2::new(18.0, rect.height() / 2.0),
-        egui::Align2::LEFT_CENTER,
-        icon,
-        FontId::proportional(14.0),
-        DIM,
-    );
-    ui.painter().text(
-        rect.min + Vec2::new(44.0, rect.height() / 2.0),
-        egui::Align2::LEFT_CENTER,
-        label,
-        FontId::proportional(13.5),
-        DIM,
-    );
-}
-
-fn card<R>(ui: &mut egui::Ui, fill: Color32, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    egui::Frame::none()
-        .fill(fill)
-        .rounding(Rounding::same(8.0))
-        .inner_margin(Margin::symmetric(16.0, 13.0))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            add(ui)
-        })
-        .inner
-}
-
-fn toggle(ui: &mut egui::Ui, value: &mut bool) -> egui::Response {
-    let size = Vec2::new(42.0, 22.0);
-    let (rect, mut response) = ui.allocate_exact_size(size, Sense::click());
-    if response.clicked() {
-        *value = !*value;
-        response.mark_changed();
-    }
-    let t = ui.ctx().animate_bool(response.id, *value);
-    let bg = if *value { ACCENT } else { Color32::from_rgb(0x3A, 0x3A, 0x42) };
-    ui.painter().rect_filled(rect, Rounding::same(11.0), bg);
-    let cx = egui::lerp((rect.left() + 11.0)..=(rect.right() - 11.0), t);
-    ui.painter().circle_filled(egui::pos2(cx, rect.center().y), 8.0, Color32::WHITE);
-    response
-}
-
-fn icon_badge(ui: &mut egui::Ui, glyph: &str, color: Color32) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(26.0), Sense::hover());
-    ui.painter().circle_filled(rect.center(), 12.0, color.linear_multiply(0.22));
-    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, glyph, FontId::proportional(13.0), color);
-}
-
-impl App {
-    fn overlay_page(&mut self, ui: &mut egui::Ui) {
-        ui.label(RichText::new("Overlay").size(28.0).strong());
-        ui.add_space(12.0);
-
-        // bandeau d'information
-        card(ui, CARD_SOFT, |ui| {
-            ui.horizontal(|ui| {
-                icon_badge(ui, "i", ACCENT);
-                ui.vertical(|ui| {
-                    ui.label(RichText::new("Les fréquences d'images proviennent de Windows").size(13.5).strong());
-                    ui.label(RichText::new("Aucun hook, aucune injection : rien ne touche à vos jeux.").size(12.0).color(DIM));
-                });
-            });
-        });
-        ui.add_space(8.0);
-
-        // FPS
-        card(ui, CARD, |ui| {
-            ui.horizontal(|ui| {
-                icon_badge(ui, "\u{2713}", Color32::from_rgb(0x8A, 0xD6, 0x7A));
-                ui.vertical(|ui| {
-                    ui.label(RichText::new("Les FPS sont activés").size(13.5));
-                    ui.label(RichText::new("Températures, charge et mémoire dans un coin de votre jeu.").size(12.0).color(DIM));
-                });
-            });
-        });
-        ui.add_space(8.0);
-
-        // bascule
-        card(ui, CARD, |ui| {
-            ui.horizontal(|ui| {
-                icon_badge(ui, "\u{25A3}", ORANGE);
-                ui.vertical(|ui| {
-                    ui.label(RichText::new("Afficher les statistiques").size(13.5));
-                    ui.label(RichText::new("Raccourci : Alt+Shift+O.").size(12.0).color(DIM));
-                });
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if toggle(ui, &mut self.config.show_stats).changed() {
-                        self.dirty = true;
-                    }
-                });
-            });
-        });
-        ui.add_space(12.0);
-
-        // aperçu
-        let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 150.0), Sense::hover());
-        gradient(ui, rect);
-        ui.painter().text(
-            rect.min + Vec2::new(18.0, 22.0),
-            egui::Align2::LEFT_TOP,
-            "FPS    240   4.2 ms",
-            FontId::proportional(13.0),
-            Color32::WHITE,
-        );
-        for (i, line) in ["CPU    27%   51°C", "GPU    6%    37°C", "RAM    13.0 / 32 Go"].iter().enumerate() {
-            ui.painter().text(
-                rect.min + Vec2::new(18.0, 46.0 + i as f32 * 20.0),
-                egui::Align2::LEFT_TOP,
-                *line,
-                FontId::proportional(13.0),
-                Color32::from_rgba_unmultiplied(255, 255, 255, 200),
-            );
-        }
-        ui.add_space(12.0);
-
-        // disposition
-        card(ui, CARD, |ui| {
-            ui.horizontal(|ui| {
-                icon_badge(ui, "\u{25A6}", DIM);
-                ui.vertical(|ui| {
-                    ui.label(RichText::new("Disposition").size(13.5));
-                    ui.label(RichText::new("Panneau de lignes, ligne compacte ou graphique.").size(12.0).color(DIM));
-                });
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    egui::ComboBox::from_id_salt("layout")
-                        .selected_text(LAYOUTS[self.layout])
-                        .width(150.0)
-                        .show_ui(ui, |ui| {
-                            for (i, name) in LAYOUTS.iter().enumerate() {
-                                ui.selectable_value(&mut self.layout, i, *name);
-                            }
-                        });
-                });
-            });
-        });
-        ui.add_space(14.0);
-
-        // thèmes
-        ui.label(RichText::new("Thème").size(13.5).strong());
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            for (i, (name, a, b)) in [
-                ("Panneau", Color32::from_rgb(0x1F, 0x2A, 0x33), Color32::from_rgb(0x2E, 0x4A, 0x3E)),
-                ("Clair", Color32::from_rgb(0xE8, 0xE8, 0xEE), Color32::from_rgb(0xD6, 0xD6, 0xE2)),
-                ("Graphique", Color32::from_rgb(0x20, 0x24, 0x2E), Color32::from_rgb(0x3A, 0x2E, 0x4A)),
-                ("Néon", Color32::from_rgb(0x14, 0x1A, 0x1C), Color32::from_rgb(0x1E, 0x3A, 0x2A)),
-            ]
-            .iter()
-            .enumerate()
-            {
-                let selected = self.theme == i;
-                let (rect, response) = ui.allocate_exact_size(Vec2::new(150.0, 92.0), Sense::click());
-                let mut mesh = Mesh::default();
-                mesh.colored_vertex(rect.left_top(), *a);
-                mesh.colored_vertex(rect.right_top(), *b);
-                mesh.colored_vertex(rect.right_bottom(), *b);
-                mesh.colored_vertex(rect.left_bottom(), *a);
-                mesh.add_triangle(0, 1, 2);
-                mesh.add_triangle(0, 2, 3);
-                ui.painter().add(egui::Shape::mesh(mesh));
-                ui.painter().rect_stroke(
-                    rect,
-                    Rounding::same(6.0),
-                    Stroke::new(if selected { 2.0 } else { 1.0 }, if selected { ACCENT } else { Color32::from_rgb(0x36, 0x36, 0x3E) }),
-                );
-                ui.painter().text(
-                    rect.left_top() + Vec2::new(10.0, 10.0),
-                    egui::Align2::LEFT_TOP,
-                    format!("FPS  144"),
-                    FontId::proportional(12.0),
-                    Color32::WHITE,
-                );
-                ui.painter().text(
-                    rect.left_top() + Vec2::new(10.0, 32.0),
-                    egui::Align2::LEFT_TOP,
-                    "CPU  34%  67°C",
-                    FontId::proportional(10.5),
-                    Color32::from_rgba_unmultiplied(255, 255, 255, 190),
-                );
-                ui.painter().text(
-                    rect.left_bottom() + Vec2::new(10.0, -14.0),
-                    egui::Align2::LEFT_CENTER,
-                    *name,
-                    FontId::proportional(10.5),
-                    DIM,
-                );
-                if response.clicked() {
-                    self.theme = i;
-                }
-                ui.add_space(2.0);
-            }
-        });
-    }
-
-    fn reticule_page(&mut self, ui: &mut egui::Ui) {
-        ui.label(RichText::new("Réticule").size(28.0).strong());
-        ui.add_space(12.0);
-        card(ui, CARD, |ui| {
-            ui.label(RichText::new("Dix réticules + éditeur").size(13.5));
-            ui.label(RichText::new("Portage du dessin D2D en cours — étape suivante du plan.").size(12.0).color(DIM));
-        });
-    }
-
-    fn settings_page(&mut self, ui: &mut egui::Ui) {
-        ui.label(RichText::new("Paramètres").size(28.0).strong());
-        ui.add_space(12.0);
-
-        card(ui, CARD, |ui| {
-            ui.horizontal(|ui| {
-                icon_badge(ui, "\u{25B6}", ACCENT);
-                ui.vertical(|ui| {
-                    ui.label(RichText::new("Lancer au démarrage").size(13.5));
-                    ui.label(RichText::new("Démarre l'overlay à l'ouverture de session.").size(12.0).color(DIM));
-                });
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let mut auto = autostart_enabled();
-                    if toggle(ui, &mut auto).changed() {
-                        set_autostart(auto);
-                    }
-                });
-            });
-        });
-        ui.add_space(8.0);
-
-        card(ui, CARD, |ui| {
-            ui.horizontal(|ui| {
-                icon_badge(ui, "\u{1F5C1}", DIM);
-                ui.vertical(|ui| {
-                    ui.label(RichText::new("Dossier de configuration").size(13.5));
-                    ui.label(RichText::new("config.json, relu à chaud par l'overlay.").size(12.0).color(DIM));
-                });
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.button("Ouvrir").clicked() {
-                        let _ = Command::new("explorer.exe")
-                            .arg(Config::path().parent().unwrap_or(&PathBuf::from(".")))
-                            .spawn();
-                    }
-                });
-            });
-        });
-        ui.add_space(8.0);
-
-        card(ui, CARD, |ui| {
-            ui.horizontal(|ui| {
-                icon_badge(ui, "\u{2139}", DIM);
-                ui.vertical(|ui| {
-                    ui.label(RichText::new("Overlay Rust").size(13.5));
-                    ui.label(RichText::new("21 Mo de RAM, sans .NET ni WebView2.").size(12.0).color(DIM));
-                });
-            });
-        });
-    }
-}
-
-const ORANGE: Color32 = Color32::from_rgb(0xE8, 0xA0, 0x5C);
-
-fn gradient(ui: &mut egui::Ui, rect: Rect) {
-    let mut mesh = Mesh::default();
-    let left = Color32::from_rgb(0x1E, 0x33, 0x2B);
-    let right = Color32::from_rgb(0x6E, 0x64, 0x38);
-    mesh.colored_vertex(rect.left_top(), left);
-    mesh.colored_vertex(rect.right_top(), right);
-    mesh.colored_vertex(rect.right_bottom(), right);
-    mesh.colored_vertex(rect.left_bottom(), left);
-    mesh.add_triangle(0, 1, 2);
-    mesh.add_triangle(0, 2, 3);
-    ui.painter().add(egui::Shape::mesh(mesh));
-    ui.painter().rect_stroke(rect, Rounding::same(8.0), Stroke::new(1.0, Color32::from_rgb(0x36, 0x36, 0x3E)));
-}
-
-fn placeholder(ui: &mut egui::Ui, title: &str, text: &str) {
-    ui.label(RichText::new(title).size(28.0).strong());
-    ui.add_space(12.0);
-    card(ui, CARD, |ui| {
-        ui.label(RichText::new(text).size(12.5).color(DIM));
-    });
-}
-
-fn autostart_path() -> PathBuf {
-    let appdata = std::env::var("APPDATA").unwrap_or_default();
-    PathBuf::from(appdata).join("Microsoft\\Windows\\Start Menu\\Programs\\Startup\\FPSOverlayRust.vbs")
-}
-
-fn autostart_enabled() -> bool {
-    autostart_path().exists()
-}
-
-fn set_autostart(enabled: bool) {
-    let path = autostart_path();
-    if enabled {
-        let exe = std::env::var("LOCALAPPDATA").unwrap_or_default() + "\\Programs\\FPSOverlayRust\\overlay.exe";
-        let script = format!("CreateObject(\"WScript.Shell\").Run \"\"\"{exe}\"\" 0, False");
-        let _ = std::fs::write(path, script);
-    } else {
-        let _ = std::fs::remove_file(path);
-    }
-}
-
-fn dark_title_bar() {
-    use windows::core::w;
-    use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE};
-    use windows::Win32::UI::WindowsAndMessaging::FindWindowW;
-
-    unsafe {
-        if let Ok(hwnd) = FindWindowW(None, w!("FPS Overlay — Réglages")) {
+    /// Vrai une fois appliqué ; rappelé à chaque image tant que la fenêtre n'existe pas encore.
+    pub fn dark_title_bar(frame: &eframe::Frame) -> bool {
+        let Ok(handle) = frame.window_handle() else {
+            return false;
+        };
+        let RawWindowHandle::Win32(win32) = handle.as_raw() else {
+            return true;
+        };
+        let hwnd = HWND(win32.hwnd.get() as *mut _);
+        unsafe {
             let dark: i32 = 1;
-            let _ = DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark as *const _ as *const _, 4);
+            let applied = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_USE_IMMERSIVE_DARK_MODE,
+                &dark as *const _ as *const _,
+                4,
+            )
+            .is_ok();
             let round: i32 = 2;
-            let _ = DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &round as *const _ as *const _, 4);
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_WINDOW_CORNER_PREFERENCE,
+                &round as *const _ as *const _,
+                4,
+            );
+            applied
+        }
+    }
+
+    /// Ramène au premier plan la fenêtre déjà ouverte.
+    pub fn focus_existing(title: &str) {
+        let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+        unsafe {
+            if let Ok(hwnd) = FindWindowW(None, PCWSTR(wide.as_ptr())) {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+                let _ = SetForegroundWindow(hwnd);
+            }
         }
     }
 }
 
 fn main() -> eframe::Result<()> {
+    let Some(_instance) = single_instance::acquire("settings") else {
+        platform::focus_existing(TITLE);
+        return Ok(());
+    };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1060.0, 720.0])
-            .with_min_inner_size([900.0, 600.0])
-            .with_title("FPS Overlay — Réglages"),
+            .with_inner_size([1040.0, 760.0])
+            .with_min_inner_size([820.0, 560.0])
+            .with_title(TITLE),
         ..Default::default()
     };
-    eframe::run_native("FPS Overlay", options, Box::new(|cc| Ok(Box::new(App::new(cc)))))
+    eframe::run_native(
+        "FPS Overlay",
+        options,
+        Box::new(|cc| Ok(Box::new(App::new(cc)))),
+    )
 }

@@ -17,6 +17,42 @@ pub fn foreground_pid() -> u32 {
     }
 }
 
+/// Nom de l'exécutable d'un processus, sans « .exe » (« PID n » s'il est inaccessible).
+pub fn process_name(pid: u32) -> String {
+    use windows::core::PWSTR;
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    unsafe {
+        let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
+            return format!("PID {pid}");
+        };
+        let mut buffer = [0u16; 260];
+        let mut len = buffer.len() as u32;
+        let ok = QueryFullProcessImageNameW(
+            handle,
+            PROCESS_NAME_WIN32,
+            PWSTR(buffer.as_mut_ptr()),
+            &mut len,
+        )
+        .is_ok();
+        let _ = CloseHandle(handle);
+        if !ok {
+            return format!("PID {pid}");
+        }
+        let path = String::from_utf16_lossy(&buffer[..len as usize]);
+        let file = path.rsplit('\\').next().unwrap_or(&path);
+        let lower = file.to_ascii_lowercase();
+        if lower.ends_with(".exe") {
+            file[..file.len() - 4].to_owned()
+        } else {
+            file.to_owned()
+        }
+    }
+}
+
 /// Vérifie qu'un processus consomme réellement le moteur 3D du GPU.
 pub struct GameProbe {
     query: Query,

@@ -54,13 +54,44 @@ pub fn package_power() -> Option<f32> {
     if rc != 0 {
         return None;
     }
-    Some(f32::from_le_bytes(buf[OFFSET_POWER..OFFSET_POWER + 4].try_into().ok()?))
+    Some(f32::from_le_bytes(
+        buf[OFFSET_POWER..OFFSET_POWER + 4].try_into().ok()?,
+    ))
 }
 /// Chemin du fichier publié par ovl-sensor (exécuté avec élévation).
 pub const TEMP_FILE: &str = r"C:\ProgramData\OverlayTemp\cpu.txt";
 
+/// Au-delà, la valeur publiée est considérée comme périmée (capteur arrêté).
+/// Le capteur écrit toutes les 2 s par défaut.
+pub const SENSOR_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// État du capteur élevé, pour l'expliquer dans les réglages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SensorState {
+    /// Le fichier est récent.
+    Running,
+    /// Le fichier existe mais n'est plus mis à jour.
+    Stopped,
+    /// Le fichier n'a jamais été écrit.
+    NeverStarted,
+}
+
+pub fn sensor_state() -> SensorState {
+    match std::fs::metadata(TEMP_FILE).and_then(|m| m.modified()) {
+        Ok(modified) => match modified.elapsed() {
+            Ok(age) if age > SENSOR_STALE_AFTER => SensorState::Stopped,
+            _ => SensorState::Running,
+        },
+        Err(_) => SensorState::NeverStarted,
+    }
+}
+
 /// Température lue depuis le fichier publié par le capteur élevé.
+/// Une valeur périmée n'est pas renvoyée : sinon le HUD figerait la dernière température connue.
 pub fn cpu_temp_from_file() -> Option<f32> {
+    if sensor_state() != SensorState::Running {
+        return None;
+    }
     let text = std::fs::read_to_string(TEMP_FILE).ok()?;
     let value: f32 = text.trim().parse().ok()?;
     (value > 0.0 && value < 120.0).then_some(value)

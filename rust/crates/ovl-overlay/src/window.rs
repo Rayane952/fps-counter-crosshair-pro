@@ -1,191 +1,295 @@
-//! Fenêtre d'overlay : layered, transparente aux clics, topmost, suit le moniteur actif.
+//! Fenêtres de l'overlay : HUD et pop-up d'alerte. Layered (alpha par pixel), transparentes
+//! aux clics, topmost, sans prise de focus, sur le moniteur de la fenêtre au premier plan.
 
-use windows::core::w;
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use ovl_core::hud::{Cell, Corner, Layout, Palette, Row};
+use windows::core::{w, PCWSTR};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MonitorFromWindow, UpdateWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    GetDC, GetMonitorInfoW, MonitorFromWindow, ReleaseDC, AC_SRC_ALPHA, AC_SRC_OVER, BLENDFUNCTION,
+    MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
 use windows::Win32::UI::HiDpi::{
-    GetDpiForWindow, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    GetDpiForMonitor, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    MDT_EFFECTIVE_DPI,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetForegroundWindow, GetMessageW,
-    PeekMessageW, RegisterClassW, SetLayeredWindowAttributes, SetWindowPos, ShowWindow,
-    TranslateMessage, CS_HREDRAW, CS_VREDRAW, HWND_TOPMOST, LWA_ALPHA, MSG, PM_REMOVE,
-    SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOW, WM_QUIT, WNDCLASSW, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetForegroundWindow, PeekMessageW,
+    RegisterClassW, SetWindowPos, ShowWindow, TranslateMessage, UpdateLayeredWindow, HWND_TOPMOST,
+    MSG, PM_REMOVE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOWNOACTIVATE, ULW_ALPHA,
+    WM_HOTKEY, WM_QUIT, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TRANSPARENT, WS_POPUP,
 };
 
-use crate::painter::{PaintCtx, Theme};
+use crate::painter::{Renderer, Scene};
 
-#[derive(Clone, Copy)]
-pub struct OverlayConfig {
-    pub width: i32,
-    pub height: i32,
-    pub margin: i32,
+/// Apparence demandée par la configuration.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HudSettings {
     pub scale: f32,
-    pub theme: Theme,
+    /// Pixels logiques.
+    pub margin_x: i32,
+    pub margin_y: i32,
+    pub corner: Corner,
+    pub layout: Layout,
+    pub palette: Palette,
+    pub opacity: f32,
 }
 
-impl Default for OverlayConfig {
-    fn default() -> Self {
-        Self { width: 200, height: 150, margin: 12, scale: 1.0, theme: Theme::dark() }
+/// Ce que `pump` a reçu depuis le dernier appel.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Pumped {
+    pub quit: bool,
+    /// Identifiant du raccourci global déclenché.
+    pub hotkey: Option<i32>,
+}
+
+/// Moniteur de la fenêtre au premier plan : zone de travail et facteur DPI.
+fn target_monitor() -> Option<(RECT, f32)> {
+    unsafe {
+        let monitor = MonitorFromWindow(GetForegroundWindow(), MONITOR_DEFAULTTONEAREST);
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if !GetMonitorInfoW(monitor, &mut info).as_bool() {
+            return None;
+        }
+        let (mut dpi_x, mut dpi_y) = (96u32, 96u32);
+        let _ = GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y);
+        Some((info.rcWork, dpi_x as f32 / 96.0))
     }
 }
 
-static mut CTX: *mut PaintCtx = std::ptr::null_mut();
-static mut ROWS: Option<Vec<(String, String)>> = None;
+/// Une fenêtre layered et son moteur de rendu.
+struct Layer {
+    hwnd: HWND,
+    renderer: Option<Renderer>,
+    visible: bool,
+}
+
+impl Layer {
+    fn create(class: PCWSTR, title: PCWSTR) -> Option<Self> {
+        unsafe {
+            let ex_style = WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+            match CreateWindowExW(
+                ex_style, class, title, WS_POPUP, 0, 0, 1, 1, None, None, None, None,
+            ) {
+                Ok(hwnd) => Some(Self {
+                    hwnd,
+                    renderer: None,
+                    visible: false,
+                }),
+                Err(err) => {
+                    log::error!("CreateWindowExW: {err}");
+                    None
+                }
+            }
+        }
+    }
+
+    fn renderer(&mut self, k: f32) -> Option<&mut Renderer> {
+        if self
+            .renderer
+            .as_ref()
+            .map_or(true, |r| (r.k() - k).abs() > 0.001)
+        {
+            self.renderer = Renderer::new(k);
+        }
+        self.renderer.as_mut()
+    }
+
+    /// Dessine la scène et place la fenêtre ; `place` reçoit la taille et renvoie la position.
+    fn draw(&mut self, k: f32, scene: &Scene, place: impl FnOnce(i32, i32) -> (i32, i32)) {
+        let hwnd = self.hwnd;
+        let Some(renderer) = self.renderer(k) else {
+            return;
+        };
+        let Some(image) = renderer.render(scene) else {
+            return;
+        };
+        let (x, y) = place(image.width, image.height);
+        unsafe {
+            let screen = GetDC(None);
+            let blend = BLENDFUNCTION {
+                BlendOp: AC_SRC_OVER as u8,
+                BlendFlags: 0,
+                SourceConstantAlpha: 255,
+                AlphaFormat: AC_SRC_ALPHA as u8,
+            };
+            let _ = UpdateLayeredWindow(
+                hwnd,
+                screen,
+                Some(&POINT { x, y }),
+                Some(&SIZE {
+                    cx: image.width,
+                    cy: image.height,
+                }),
+                image.dc,
+                Some(&POINT { x: 0, y: 0 }),
+                windows::Win32::Foundation::COLORREF(0),
+                Some(&blend),
+                ULW_ALPHA,
+            );
+            ReleaseDC(None, screen);
+        }
+    }
+
+    fn show(&mut self) {
+        unsafe {
+            if !self.visible {
+                let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
+                self.visible = true;
+            }
+            // un jeu plein écran peut repasser devant : on réaffirme le premier plan à chaque rendu
+            let _ = SetWindowPos(
+                self.hwnd,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+    }
+
+    fn hide(&mut self) {
+        if self.visible {
+            unsafe {
+                let _ = ShowWindow(self.hwnd, SW_HIDE);
+            }
+            self.visible = false;
+        }
+    }
+}
 
 pub struct Overlay {
-    hwnd: HWND,
-    config: OverlayConfig,
-    last_pos: Option<(i32, i32, i32, i32)>,
+    hud: Layer,
+    popup: Layer,
 }
 
 impl Overlay {
-    pub fn create(config: OverlayConfig) -> Option<Self> {
+    /// Crée les fenêtres, masquées.
+    pub fn create() -> Option<Self> {
         unsafe {
             let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-
-            let class_name = w!("KoykOverlayRust");
-            // fond noir = couleur transparente (color key), dès la création
-            let black: windows::Win32::Graphics::Gdi::HBRUSH =
-                windows::Win32::Graphics::Gdi::CreateSolidBrush(COLORREF(0));
+            let class = w!("FPSOverlayHud");
             let wc = WNDCLASSW {
-                style: CS_HREDRAW | CS_VREDRAW,
                 lpfnWndProc: Some(wndproc),
-                lpszClassName: class_name,
-                hbrBackground: black,
+                lpszClassName: class,
                 ..Default::default()
             };
             RegisterClassW(&wc);
-
-            let ex_style = WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
-            let hwnd = match CreateWindowExW(
-                ex_style, class_name, w!("FPS Counter"), WS_POPUP,
-                0, 0, config.width, config.height, None, None, None, None,
-            ) {
-                Ok(hwnd) => hwnd,
-                Err(err) => {
-                    log::error!("CreateWindowExW: {err}");
-                    return None;
-                }
-            };
-
-            // panneau translucide : lisibilité garantie sur tous les fonds
-            let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 205, LWA_ALPHA);
-            let _ = ShowWindow(hwnd, SW_SHOW);
-            let _ = UpdateWindow(hwnd);
-
-            let ctx = PaintCtx::new(hwnd, config.scale)?;
-            unsafe {
-                CTX = Box::into_raw(Box::new(ctx));
-            }
-            Some(Self { hwnd, config, last_pos: None })
+            Some(Self {
+                hud: Layer::create(class, w!("FPS Overlay HUD"))?,
+                popup: Layer::create(class, w!("FPS Overlay alerte"))?,
+            })
         }
     }
 
-    /// Positionne la fenêtre en haut à droite du moniteur de la fenêtre au premier plan.
-    pub fn follow_foreground_monitor(&mut self) {
-        unsafe {
-            let front = GetForegroundWindow();
-            let monitor = MonitorFromWindow(front, MONITOR_DEFAULTTONEAREST);
-            let mut info = MONITORINFO {
-                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-                ..Default::default()
-            };
-            if GetMonitorInfoW(monitor, &mut info).as_bool() {
-                let rect: RECT = info.rcWork;
-                let dpi = GetDpiForWindow(self.hwnd) as f32 / 96.0;
-                let w = (self.config.width as f32 * dpi) as i32;
-                let h = (self.config.height as f32 * dpi) as i32;
-                let m = (self.config.margin as f32 * dpi) as i32;
-                let x = rect.right - w - m;
-                let y = rect.top + m;
-                let target = (x, y, w, h);
-                // ne pas repositionner si rien ne change : sinon la fenêtre est
-                // réinitialisée (fond noir) juste après la peinture
-                if self.last_pos != Some(target) {
-                    self.last_pos = Some(target);
-                    let _ = SetWindowPos(self.hwnd, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
-                }
-            }
-        }
-    }
-
-    pub fn paint(&mut self, lines: &[(String, String)]) {
-        unsafe {
-            // peinture directe : sur une fenêtre layered, WM_PAINT ne reçoit pas de surface utile
-            let hdc = windows::Win32::Graphics::Gdi::GetDC(self.hwnd);
-            if !hdc.is_invalid() {
-                if !CTX.is_null() {
-                    (*CTX).paint_dc(hdc, lines);
-                }
-                windows::Win32::Graphics::Gdi::ReleaseDC(self.hwnd, hdc);
-            }
-        }
-    }
-
-    /// Change l'échelle du panneau (reconstruit les polices).
-    pub fn set_scale(&mut self, scale: f32) {
-        if (self.config.scale - scale).abs() < 0.01 {
+    /// Dessine le HUD dans le coin choisi, et l'affiche.
+    pub fn render(
+        &mut self,
+        settings: &HudSettings,
+        rows: &[Row],
+        graph: &[f32],
+        alert: Option<&str>,
+        flash: bool,
+    ) {
+        let Some((work, dpi)) = target_monitor() else {
             return;
-        }
-        self.config.scale = scale;
-        if let Some(ctx) = PaintCtx::new(self.hwnd, scale) {
-            unsafe {
-                if !CTX.is_null() {
-                    drop(Box::from_raw(CTX));
-                }
-                CTX = Box::into_raw(Box::new(ctx));
-            }
-        }
+        };
+        let k = settings.scale * dpi;
+        let scene = Scene {
+            rows,
+            layout: settings.layout,
+            palette: settings.palette,
+            opacity: settings.opacity,
+            graph,
+            alert,
+            flash,
+        };
+        let mx = (settings.margin_x as f32 * dpi).round() as i32;
+        let my = (settings.margin_y as f32 * dpi).round() as i32;
+        let corner = settings.corner;
+        self.hud.draw(k, &scene, |w, h| {
+            let x = if corner.is_left() {
+                work.left + mx
+            } else {
+                work.right - w - mx
+            };
+            let y = if corner.is_top() {
+                work.top + my
+            } else {
+                work.bottom - h - my
+            };
+            (x, y)
+        });
+        self.hud.show();
+    }
+
+    /// Pop-up centré en haut de l'écran du jeu ; `None` le masque.
+    pub fn popup(&mut self, settings: &HudSettings, text: Option<&str>) {
+        let Some(text) = text else {
+            self.popup.hide();
+            return;
+        };
+        let Some((work, dpi)) = target_monitor() else {
+            return;
+        };
+        let mut palette = settings.palette;
+        palette.value = palette.alert;
+        let rows = [Row {
+            label: "Alerte",
+            cell: Cell::Text {
+                value: text.to_owned(),
+                detail: None,
+            },
+        }];
+        let scene = Scene {
+            rows: &rows,
+            layout: Layout::Line,
+            palette,
+            opacity: settings.opacity.max(0.85),
+            graph: &[],
+            alert: None,
+            flash: false,
+        };
+        self.popup.draw(1.3 * dpi, &scene, |w, _| {
+            (
+                (work.left + work.right - w) / 2,
+                work.top + (work.bottom - work.top) / 12,
+            )
+        });
+        self.popup.show();
     }
 
     pub fn hide(&mut self) {
-        unsafe { let _ = ShowWindow(self.hwnd, SW_HIDE); }
+        self.hud.hide();
+        self.popup.hide();
     }
 
-    pub fn show(&mut self) {
-        unsafe { let _ = ShowWindow(self.hwnd, SW_SHOW); }
-    }
-
-    /// Traite les messages en attente ; false si l'application doit quitter.
-    pub fn pump() -> bool {
+    /// Traite les messages en attente du thread.
+    pub fn pump() -> Pumped {
+        let mut out = Pumped::default();
         unsafe {
             let mut msg = MSG::default();
             while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
-                if msg.message == WM_QUIT {
-                    return false;
+                match msg.message {
+                    WM_QUIT => out.quit = true,
+                    WM_HOTKEY => out.hotkey = Some(msg.wParam.0 as i32),
+                    _ => {
+                        let _ = TranslateMessage(&msg);
+                        DispatchMessageW(&msg);
+                    }
                 }
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-            }
-            true
-        }
-    }
-
-    pub fn run_loop() {
-        unsafe {
-            let mut msg = MSG::default();
-            while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
             }
         }
+        out
     }
 }
 
+/// Le contenu est fourni par `UpdateLayeredWindow` : aucune peinture à faire ici.
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
-    match msg {
-        windows::Win32::UI::WindowsAndMessaging::WM_PAINT => {
-            use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, PAINTSTRUCT};
-            let mut ps = PAINTSTRUCT::default();
-            let _hdc = BeginPaint(hwnd, &mut ps);
-            let _ = EndPaint(hwnd, &ps);
-            LRESULT(0)
-        }
-        windows::Win32::UI::WindowsAndMessaging::WM_ERASEBKGND => LRESULT(1),
-        _ => DefWindowProcW(hwnd, msg, wp, lp),
-    }
+    DefWindowProcW(hwnd, msg, wp, lp)
 }

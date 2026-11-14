@@ -11,5 +11,6 @@ path = "src/main.rs"
 ovl-core = { path = "../ovl-core" }
 ovl-overlay = { path = "../ovl-overlay" }
 ovl-platform = { path = "../ovl-platform" }
+windows = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }

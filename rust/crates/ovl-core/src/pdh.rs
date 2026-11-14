@@ -25,7 +25,8 @@ impl Query {
     pub fn add(&self, path: &str) -> Option<Counter> {
         let w = wide(path);
         let mut handle: isize = 0;
-        let status = unsafe { PdhAddEnglishCounterW(self.handle, PCWSTR(w.as_ptr()), 0, &mut handle) };
+        let status =
+            unsafe { PdhAddEnglishCounterW(self.handle, PCWSTR(w.as_ptr()), 0, &mut handle) };
         (status == 0).then_some(Counter { handle })
     }
 
