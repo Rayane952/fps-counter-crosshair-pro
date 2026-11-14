@@ -344,7 +344,8 @@ fn main() -> eframe::Result<()> {
         .with_inner_size([1040.0, 760.0])
         .with_min_inner_size([820.0, 560.0])
         .with_title(TITLE);
-    if let Some(icon) = platform::window_icon(64) {
+    // 32 px : version réticule de l'icône, lisible aussi réduite en barre de titre
+    if let Some(icon) = platform::window_icon(32) {
         viewport = viewport.with_icon(icon);
     }
     let options = eframe::NativeOptions {
