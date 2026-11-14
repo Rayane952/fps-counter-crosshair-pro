@@ -3,10 +3,15 @@ name = "ovl-ui"
 version.workspace = true
 edition.workspace = true
 
+[[bin]]
+name = "settings"
+path = "src/main.rs"
+
 [dependencies]
 ovl-core = { path = "../ovl-core" }
-ovl-overlay = { path = "../ovl-overlay" }
-egui.workspace = true
-eframe.workspace = true
-serde.workspace = true
-serde_json.workspace = true
+ovl-platform = { path = "../ovl-platform" }
+windows = { workspace = true }
+eframe = { version = "0.29", default-features = false, features = ["glow", "default_fonts"] }
+egui = "0.29"
+serde = { workspace = true }
+serde_json = { workspace = true }

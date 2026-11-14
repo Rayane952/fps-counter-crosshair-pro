@@ -114,7 +114,7 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             let event = lp.0 as u32;
             match event {
                 windows::Win32::UI::WindowsAndMessaging::WM_RBUTTONUP => show_menu(hwnd),
-                windows::Win32::UI::WindowsAndMessaging::WM_LBUTTONDBLCLK => crate::settings::open(),
+                windows::Win32::UI::WindowsAndMessaging::WM_LBUTTONDBLCLK => open_settings(),
                 _ => {}
             }
             LRESULT(0)
@@ -147,6 +147,20 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
         }
         _ => DefWindowProcW(hwnd, msg, wp, lp),
     }
+}
+
+/// Lance la fenêtre de réglages (binaire séparé, egui).
+fn open_settings() {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let settings = dir.join("settings.exe");
+            if settings.exists() {
+                let _ = std::process::Command::new(settings).spawn();
+                return;
+            }
+        }
+    }
+    crate::settings::open();
 }
 
 /// Boucle de messages (bloquante) — utile pour un binaire sans overlay.

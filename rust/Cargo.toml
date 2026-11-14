@@ -4,6 +4,7 @@ members = [
     "crates/ovl-core",
     "crates/ovl-overlay",
     "crates/ovl-platform",
+    "crates/ovl-ui",
     "crates/ovl-app",
 ]
 
