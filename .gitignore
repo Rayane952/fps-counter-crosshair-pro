@@ -1,0 +1,9 @@
+installer/payload/*
+!installer/payload/install.ps1
+!installer/payload/uninstall.ps1
+dist/
+tools/
+gh/
+*.zip
+*.exe
+*.7z
