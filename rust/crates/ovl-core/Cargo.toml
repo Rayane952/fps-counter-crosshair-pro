@@ -2,6 +2,15 @@
 name = "ovl-core"
 version.workspace = true
 edition.workspace = true
+autobins = false
+
+[[bin]]
+name = "FPSOverlaySensor"
+path = "src/bin/sensor.rs"
+
+[[bin]]
+name = "probe"
+path = "src/bin/probe.rs"
 
 [dependencies]
 windows = { workspace = true }

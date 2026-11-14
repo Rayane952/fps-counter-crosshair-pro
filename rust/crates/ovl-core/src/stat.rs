@@ -93,7 +93,7 @@ impl Stat {
             Stat::Fps => "Images par seconde du jeu au premier plan.",
             Stat::FrameTime => "Durée moyenne d'une image, à côté des FPS.",
             Stat::Cpu => "Utilisation du processeur, comme le Gestionnaire des tâches.",
-            Stat::CpuTemp => "Capteur AMD publié par sensor.exe.",
+            Stat::CpuTemp => "Capteur AMD, publié par FPSOverlaySensor.",
             Stat::Gpu => "Moteur graphique le plus occupé.",
             Stat::GpuTemp => "Température publiée par le pilote graphique.",
             Stat::Vram => "Mémoire vidéo dédiée utilisée / totale.",

@@ -183,6 +183,16 @@ impl eframe::App for App {
 
         let snap = self.live.lock().map(|s| s.clone()).unwrap_or_default();
 
+        // réduire = passer en arrière-plan : les réglages se ferment (et libèrent leur mémoire),
+        // l'overlay continue dans la zone de notification, d'où on rouvre les réglages
+        if ctx.input(|i| i.viewport().minimized).unwrap_or(false) {
+            if !single_instance::is_running("overlay") {
+                let _ = live::start_overlay();
+            }
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+
         egui::SidePanel::left("nav")
             .exact_width(212.0)
             .resizable(false)
@@ -261,6 +271,58 @@ mod platform {
         }
     }
 
+    /// Pixels RGBA de l'icône de l'exécutable, pour eframe (qui imposerait sinon son logo).
+    pub fn window_icon(size: i32) -> Option<eframe::egui::IconData> {
+        use windows::Win32::Graphics::Gdi::{
+            CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, BITMAPINFO, BITMAPINFOHEADER,
+            BI_RGB, DIB_RGB_COLORS, HGDIOBJ,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, ICONINFO};
+        let icon = ovl_platform::app_icon(size)?;
+        unsafe {
+            let mut info = ICONINFO::default();
+            GetIconInfo(icon, &mut info).ok()?;
+            let mut bmi = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: size,
+                    biHeight: -size, // de haut en bas
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let mut bgra = vec![0u8; (size * size * 4) as usize];
+            let dc = CreateCompatibleDC(None);
+            let lines = GetDIBits(
+                dc,
+                info.hbmColor,
+                0,
+                size as u32,
+                Some(bgra.as_mut_ptr() as *mut _),
+                &mut bmi,
+                DIB_RGB_COLORS,
+            );
+            let _ = DeleteDC(dc);
+            let _ = DeleteObject(HGDIOBJ(info.hbmColor.0));
+            let _ = DeleteObject(HGDIOBJ(info.hbmMask.0));
+            let _ = DestroyIcon(icon);
+            if lines == 0 {
+                return None;
+            }
+            for px in bgra.chunks_exact_mut(4) {
+                px.swap(0, 2);
+            }
+            Some(eframe::egui::IconData {
+                rgba: bgra,
+                width: size as u32,
+                height: size as u32,
+            })
+        }
+    }
+
     /// Ramène au premier plan la fenêtre déjà ouverte.
     pub fn focus_existing(title: &str) {
         let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
@@ -278,11 +340,15 @@ fn main() -> eframe::Result<()> {
         platform::focus_existing(TITLE);
         return Ok(());
     };
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size([1040.0, 760.0])
+        .with_min_inner_size([820.0, 560.0])
+        .with_title(TITLE);
+    if let Some(icon) = platform::window_icon(64) {
+        viewport = viewport.with_icon(icon);
+    }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1040.0, 760.0])
-            .with_min_inner_size([820.0, 560.0])
-            .with_title(TITLE),
+        viewport,
         ..Default::default()
     };
     eframe::run_native(

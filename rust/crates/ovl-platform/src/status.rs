@@ -1,4 +1,4 @@
-//! État publié par overlay.exe, lu par les réglages (status.json, à côté de config.json).
+//! État publié par l'overlay (FPSOverlay.exe), lu par les réglages (status.json, à côté de config.json).
 //!
 //! Les images (ETW) et le réseau ne sont mesurés que par l'overlay : les réglages en affichent
 //! les dernières valeurs publiées ici, pour l'aperçu et l'état de chaque mesure.
@@ -18,7 +18,7 @@ const STALE_AFTER: Duration = Duration::from_secs(5);
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OverlayStatus {
-    /// Mémoire de travail d'overlay.exe, mesurée par le processus lui-même.
+    /// Mémoire de travail de l'overlay, mesurée par le processus lui-même.
     pub working_set_bytes: u64,
     /// Le raccourci Alt+Maj+O a pu être enregistré (faux s'il est pris par une autre application).
     pub hotkey_ok: bool,

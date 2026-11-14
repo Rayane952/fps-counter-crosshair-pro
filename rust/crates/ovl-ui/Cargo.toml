@@ -1,10 +1,10 @@
-﻿[package]
+[package]
 name = "ovl-ui"
 version.workspace = true
 edition.workspace = true
 
 [[bin]]
-name = "settings"
+name = "FPSOverlaySettings"
 path = "src/main.rs"
 
 [dependencies]

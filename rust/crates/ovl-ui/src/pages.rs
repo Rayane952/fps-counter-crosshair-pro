@@ -73,6 +73,17 @@ impl App {
                             .changed();
                 },
             );
+            divider(ui);
+            row(
+                ui,
+                "Réduire ou fermer cette fenêtre",
+                Some(RichText::new(
+                    "Ferme les réglages ; l'overlay continue en arrière-plan. Pour les rouvrir : \
+                     icône FPS Overlay de la zone de notification, ou menu Démarrer.",
+                )),
+                0.0,
+                |_| {},
+            );
         });
         if autostart_changed {
             let message = if autostart {
@@ -90,7 +101,7 @@ impl App {
                 Some(s) => (
                     Tone::Ok,
                     format!(
-                        "Actif. Mémoire utilisée : {} Mo (mesurée par overlay.exe).",
+                        "Actif. Mémoire utilisée : {} Mo (mesurée par l'overlay).",
                         megabytes(s.working_set_bytes)
                     ),
                 ),

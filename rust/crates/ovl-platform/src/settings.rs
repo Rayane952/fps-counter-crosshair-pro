@@ -1,4 +1,4 @@
-//! Fenêtre de réglages de secours (Win32), utilisée seulement si settings.exe est absent.
+//! Fenêtre de réglages de secours (Win32), utilisée seulement si FPSOverlaySettings.exe est absent.
 
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
@@ -102,7 +102,7 @@ pub fn open() {
         let hwnd = match CreateWindowExW(
             Default::default(),
             class_name,
-            w!("FPS Overlay · Réglages (settings.exe introuvable)"),
+            w!("FPS Overlay · Réglages (FPSOverlaySettings.exe introuvable)"),
             WS_CAPTION | WS_SYSMENU,
             200,
             200,

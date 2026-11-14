@@ -15,7 +15,7 @@ use crate::tokens::*;
 use crate::widgets::{self, divider, row, section, Tone};
 use crate::{preview, App};
 
-/// Phrase d'état de l'overlay, déduite de l'état publié par overlay.exe et de la configuration.
+/// Phrase d'état de l'overlay, déduite de l'état publié par l'overlay et de la configuration.
 fn overlay_state(config: &Config, snap: &Snapshot) -> (Tone, String) {
     match &snap.overlay {
         None => (Tone::Error, "Arrêté : rien ne s'affichera en jeu.".into()),
@@ -78,7 +78,7 @@ impl App {
             && widgets::notice(
                 ui,
                 Tone::Error,
-                "overlay.exe ne tourne pas. Les réglages sont enregistrés mais le HUD ne s'affichera pas.",
+                "L'overlay ne tourne pas. Les réglages sont enregistrés mais le HUD ne s'affichera pas.",
                 Some("Démarrer l'overlay"),
             )
         {
@@ -440,7 +440,7 @@ impl App {
             let (tone, text, action) = match (temp, snap.sensor) {
                 (Some(t), _) => (
                     Tone::Ok,
-                    format!("{t:.0} °C, publiée par le capteur AMD (sensor.exe)."),
+                    format!("{t:.0} °C, publiée par le capteur AMD (FPSOverlaySensor)."),
                     None,
                 ),
                 _ if loading => (Tone::Neutral, "Mesure en cours…".to_owned(), None),

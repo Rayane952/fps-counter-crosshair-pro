@@ -46,10 +46,15 @@ fn icon_data(hwnd: HWND) -> NOTIFYICONDATAW {
     }
 }
 
-/// Icône système générique en attendant une icône dédiée.
+/// Icône de l'application à la taille de la zone de notification (icône générique en secours).
 unsafe fn add_icon(hwnd: HWND) -> bool {
-    let Ok(icon) = LoadIconW(None, IDI_APPLICATION) else {
-        return false;
+    use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSMICON};
+    let icon = match crate::app_icon(GetSystemMetrics(SM_CXSMICON)) {
+        Some(icon) => icon,
+        None => match LoadIconW(None, IDI_APPLICATION) {
+            Ok(icon) => icon,
+            Err(_) => return false,
+        },
     };
     let mut data = icon_data(hwnd);
     data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
@@ -187,12 +192,12 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
     }
 }
 
-/// Ouvre les réglages : settings.exe (egui) s'il est installé à côté, sinon la fenêtre Win32 de secours.
-/// settings.exe garantit lui-même l'instance unique.
+/// Ouvre les réglages (egui) installés à côté, sinon la fenêtre Win32 de secours.
+/// Les réglages garantissent eux-mêmes l'instance unique.
 pub fn open_settings() {
     if let Some(settings) = std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join("settings.exe")))
+        .and_then(|exe| exe.parent().map(|dir| dir.join(crate::names::SETTINGS_EXE)))
         .filter(|path| path.exists())
     {
         if std::process::Command::new(settings).spawn().is_ok() {
