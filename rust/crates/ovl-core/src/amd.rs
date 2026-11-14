@@ -56,3 +56,17 @@ pub fn package_power() -> Option<f32> {
     }
     Some(f32::from_le_bytes(buf[OFFSET_POWER..OFFSET_POWER + 4].try_into().ok()?))
 }
+/// Chemin du fichier publié par ovl-sensor (exécuté avec élévation).
+pub const TEMP_FILE: &str = r"C:\ProgramData\OverlayTemp\cpu.txt";
+
+/// Température lue depuis le fichier publié par le capteur élevé.
+pub fn cpu_temp_from_file() -> Option<f32> {
+    let text = std::fs::read_to_string(TEMP_FILE).ok()?;
+    let value: f32 = text.trim().parse().ok()?;
+    (value > 0.0 && value < 120.0).then_some(value)
+}
+
+/// Température : appel direct si le processus est élevé, sinon fichier du capteur.
+pub fn cpu_temp_auto() -> Option<f32> {
+    cpu_temp().or_else(cpu_temp_from_file)
+}

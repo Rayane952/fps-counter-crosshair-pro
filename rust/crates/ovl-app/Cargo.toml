@@ -10,7 +10,5 @@ path = "src/main.rs"
 [dependencies]
 ovl-core = { path = "../ovl-core" }
 ovl-overlay = { path = "../ovl-overlay" }
-ovl-ui = { path = "../ovl-ui" }
-ovl-platform = { path = "../ovl-platform" }
-log.workspace = true
-env_logger.workspace = true
+log = { workspace = true }
+env_logger = { workspace = true }

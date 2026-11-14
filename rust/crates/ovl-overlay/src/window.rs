@@ -1,13 +1,143 @@
-//! Fenêtre overlay : WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW, topmost,
-//! positionnée sur le moniteur de la fenêtre au premier plan, exclue des captures.
+//! Fenêtre d'overlay : layered, transparente aux clics, topmost, suit le moniteur actif.
 
-/// TODO(phase 2) : `CreateWindowExW` + `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`.
-pub struct OverlayWindow {
-    pub hwnd: isize,
+use windows::core::w;
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MonitorFromWindow, UpdateWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+};
+use windows::Win32::UI::HiDpi::{
+    GetDpiForWindow, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+};
+use windows::Win32::UI::WindowsAndMessaging::{
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetForegroundWindow, GetMessageW,
+    PeekMessageW, RegisterClassW, SetLayeredWindowAttributes, SetWindowPos, ShowWindow,
+    TranslateMessage, CS_HREDRAW, CS_VREDRAW, HWND_TOPMOST, LWA_COLORKEY, MSG, PM_REMOVE,
+    SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOW, WM_QUIT, WNDCLASSW, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP,
+};
+
+use crate::painter::{PaintCtx, Theme};
+
+#[derive(Clone, Copy)]
+pub struct OverlayConfig {
+    pub width: i32,
+    pub height: i32,
+    pub margin: i32,
+    pub scale: f32,
+    pub theme: Theme,
 }
 
-impl OverlayWindow {
-    pub fn create() -> Option<Self> {
-        None
+impl Default for OverlayConfig {
+    fn default() -> Self {
+        Self { width: 200, height: 150, margin: 12, scale: 1.0, theme: Theme::dark() }
+    }
+}
+
+pub struct Overlay {
+    hwnd: HWND,
+    ctx: PaintCtx,
+    config: OverlayConfig,
+}
+
+impl Overlay {
+    pub fn create(config: OverlayConfig) -> Option<Self> {
+        unsafe {
+            let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+
+            let class_name = w!("KoykOverlayRust");
+            let wc = WNDCLASSW {
+                style: CS_HREDRAW | CS_VREDRAW,
+                lpfnWndProc: Some(wndproc),
+                lpszClassName: class_name,
+                ..Default::default()
+            };
+            RegisterClassW(&wc);
+
+            let ex_style = WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+            let hwnd = match CreateWindowExW(
+                ex_style, class_name, w!("FPS Counter"), WS_POPUP,
+                0, 0, config.width, config.height, None, None, None, None,
+            ) {
+                Ok(hwnd) => hwnd,
+                Err(err) => {
+                    log::error!("CreateWindowExW: {err}");
+                    return None;
+                }
+            };
+
+            let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 0, LWA_COLORKEY);
+            let _ = ShowWindow(hwnd, SW_SHOW);
+            let _ = UpdateWindow(hwnd);
+
+            let ctx = PaintCtx::new(hwnd, config.scale)?;
+            Some(Self { hwnd, ctx, config })
+        }
+    }
+
+    /// Positionne la fenêtre en haut à droite du moniteur de la fenêtre au premier plan.
+    pub fn follow_foreground_monitor(&mut self) {
+        unsafe {
+            let front = GetForegroundWindow();
+            let monitor = MonitorFromWindow(front, MONITOR_DEFAULTTONEAREST);
+            let mut info = MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            if GetMonitorInfoW(monitor, &mut info).as_bool() {
+                let rect: RECT = info.rcWork;
+                let dpi = GetDpiForWindow(self.hwnd) as f32 / 96.0;
+                let w = (self.config.width as f32 * dpi) as i32;
+                let h = (self.config.height as f32 * dpi) as i32;
+                let m = (self.config.margin as f32 * dpi) as i32;
+                let x = rect.right - w - m;
+                let y = rect.top + m;
+                let _ = SetWindowPos(self.hwnd, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            }
+        }
+    }
+
+    pub fn paint(&mut self, lines: &[(String, String)]) {
+        self.ctx.paint(lines);
+    }
+
+    pub fn hide(&mut self) {
+        unsafe { let _ = ShowWindow(self.hwnd, SW_HIDE); }
+    }
+
+    pub fn show(&mut self) {
+        unsafe { let _ = ShowWindow(self.hwnd, SW_SHOW); }
+    }
+
+    /// Traite les messages en attente ; false si l'application doit quitter.
+    pub fn pump() -> bool {
+        unsafe {
+            let mut msg = MSG::default();
+            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                if msg.message == WM_QUIT {
+                    return false;
+                }
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+            true
+        }
+    }
+
+    pub fn run_loop() {
+        unsafe {
+            let mut msg = MSG::default();
+            while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+    }
+}
+
+unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    let _ = (hwnd, wp, lp);
+    match msg {
+        windows::Win32::UI::WindowsAndMessaging::WM_PAINT => LRESULT(0),
+        _ => DefWindowProcW(hwnd, msg, wp, lp),
     }
 }

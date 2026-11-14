@@ -5,5 +5,5 @@ edition.workspace = true
 
 [dependencies]
 ovl-core = { path = "../ovl-core" }
-windows.workspace = true
-log.workspace = true
+windows = { workspace = true }
+log = { workspace = true }

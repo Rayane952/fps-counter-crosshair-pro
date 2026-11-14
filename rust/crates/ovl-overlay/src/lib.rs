@@ -1,15 +1,7 @@
-//! Rendu de l'overlay : fenêtre layered click-through + Direct2D/DirectWrite.
+//! Overlay : fenêtre layered click-through + rendu Direct2D/DirectWrite.
 
-pub mod window;
-pub mod painter;
-pub mod crosshair;
-pub mod theme;
+mod painter;
+mod window;
 
-/// Une entrée du panneau ("FPS", "240", "4.2 ms").
-#[derive(Debug, Clone)]
-pub struct Row {
-    pub label: String,
-    pub value: String,
-    pub extra: String,
-    pub warn: bool,
-}
+pub use painter::Theme;
+pub use window::{Overlay, OverlayConfig};
