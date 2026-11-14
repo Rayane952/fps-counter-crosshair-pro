@@ -1,49 +1,106 @@
-# FPS Counter & Crosshair — Build patché (Pro permanent + capteur AMD)
+# FPS Counter & Crosshair
 
-Patchs appliqués au paquet MSIX **KoykStudio.GameOverlayFPSCounterCrosshairCPUGPUTem 1.0.7**,
-redéployé en paquet de développement `KoykStudio.GameOverlayPro` (dossier inscriptible : WindowsApps
-est verrouillé en écriture sur Windows 11 26xxx, même en SYSTEM/TrustedInstaller).
+Overlay de mesure de performance et réticule pour Windows 11, basé sur le paquet MSIX
+**KoykStudio.GameOverlayFPSCounterCrosshairCPUGPUTem**, déployé en paquet de développement
+`KoykStudio.GameOverlayPro` (dossier inscriptible dans `%LOCALAPPDATA%\Programs\OverlayMod`).
 
-| # | Patch | Effet |
-|---|---|---|
-| 01 | `src/patchers/01-pro.cs` | ProLicensed/IsPro → true ; InTrial/TrialEnded → false (Pro permanent) |
-| 02 | `src/patchers/02-sensor.cs` | Sensors.ReadThermalZoneC lit C:\ProgramData\OverlayTemp\cpu.txt |
-| 03 | `src/patchers/03-hud-fonts.cs` | températures au format des FPS (Segoe UI Variable Display, SemiBold 15·k) |
-| 04 | `src/patchers/04-hud-column.cs` | suppression du placeholder de largeur "888%" |
-| 05 | `src/patchers/05-hud-rows.cs` | sans %, la température passe dans la colonne valeur (alignée sous les FPS) |
-| 06 | `src/patchers/06-single-window.cs` | garde de ré-entrance sur App::OpenSettings (plus de double fenêtre) |
+L'application lit les images via les événements de composition de Windows : aucun hook, aucune
+injection dans les jeux.
 
-## Température CPU — source AMD
+## Fonctionnalités
+
+**Overlay de statistiques**
+
+| Mesure | Source |
+|---|---|
+| FPS, temps de frame, 1 % low, 0,1 % low | `DwmFlush` / présentation des images par Windows |
+| Charge CPU, fréquence, RAM | compteurs de performance Windows (PDH) |
+| Charge GPU, VRAM, température GPU | `D3DKMT` (données de performance de l'adaptateur, aucun pilote tiers) |
+| **Température CPU** | **SDK AMD (`Platform.dll`) — voir plus bas** |
+| Ping, perte de paquets, trafic | écho ICMP vers l'hôte choisi |
+
+Quatre dispositions : panneau, panneau + graphique, ligne compacte, minimal.
+Thèmes : clair, sombre, néon, minimal, dense — opacité, échelle, position et marges réglables.
+
+**Réticule**
+
+Dix réticules prêts à l'emploi plus un éditeur (bras, écart, épaisseur, point central,
+anneau, contour, chevron, diagonales), couleur, taille et opacité. Affichage permanent ou
+uniquement en jeu, masqué des captures d'écran si besoin.
+
+**Profils et rapports**
+
+Profils de disposition sauvegardables, application automatique par jeu, enregistrement de
+sessions (FPS moyen, 1 % low, températures) et export.
+
+**Alertes**
+
+Seuils sur FPS, température CPU/GPU, ping, perte de paquets et trafic, avec retour visuel
+dans l'overlay.
+
+**Raccourcis**
+
+`Alt+Shift+O` affiche/masque les statistiques, `Alt+Shift+X` le réticule (modifiables).
+
+## Température CPU : d'où vient la valeur
+
+Windows n'expose pas la sonde du CPU sur les cartes AM5 : les compteurs
+`\Thermal Zone Information(*)` sont absents et `MSAcpi_ThermalZoneTemperature` répond
+« non pris en charge ». La valeur est donc lue sur la chaîne officielle d'AMD :
 
 ```
-GetRmCpuParameters(void*)  →  rc=0 (nécessite l'élévation)
-   offset 0x90 : double = température CPU (°C)
-   offset 0x14 : float  = puissance package (W)
+AMD Software: Adrenalin
+   └─ RyzenMasterSDK (installé par Adrenalin)
+        └─ AMDRyzenMasterDriver.sys   (ring0, service AMDRyzenMasterDriverV32)
+             └─ SMU → registre THM_TCON_CUR_TMP (SMN 0x00059800)
+
+Platform.dll  →  GetRmCpuParameters(void* out)     [export C, __cdecl, élévation requise]
+                 offset 0x90 : double = température CPU (°C)
+                 offset 0x14 : float  = puissance package (W)
+                 offset 0x20 : float  = courant (A)
 ```
 
-Appelé depuis Platform.dll (SDK Ryzen Master installé par Adrenalin), via `src/bridge/Bridge2.cs`.
-Écrit C:\ProgramData\OverlayTemp\cpu.txt toutes les 2 s ; l'app patchée le lit.
-Tâche planifiée OverlayTempBridge (au logon, privilèges élevés). Aucun driver tiers.
+`Bridge2.exe` appelle cet export toutes les 2 s et publie la valeur dans
+`C:\ProgramData\OverlayTemp\cpu.txt`, que l'overlay relit. La tâche planifiée
+`OverlayTempBridge` le lance à l'ouverture de session avec les privilèges nécessaires
+à l'accès au pilote.
 
-## Installeur
+Aucun pilote supplémentaire n'est installé : tout vient d'AMD Software. Si Adrenalin est
+désinstallé, la température CPU cesse simplement de s'afficher (l'overlay garde la dernière
+valeur connue, sans erreur).
 
-`installer/setup.iss` (Inno Setup 6) embarque le payload complet, active le mode développeur,
-enregistre le paquet, crée la tâche et les raccourcis.
+## Installation
+
+1. Récupérer `FPS-Counter-Crosshair-Pro-Setup.exe` depuis les releases.
+2. Lancer l'installeur (droits administrateur : activation du mode développeur, enregistrement
+   du paquet, création de la tâche du pont).
+3. Prérequis pour la température CPU : AMD Software installé.
+
+Désinstallation via Applications → *FPS Counter & Crosshair* (retire la tâche, le paquet,
+les raccourcis).
+
+## Configuration
+
+`%LOCALAPPDATA%\Packages\KoykStudio.GameOverlayPro_516232dwgyvgy\LocalState\state.json`
+(écrit par l'application) : disposition, thème, métriques affichées, réticule, raccourcis,
+seuils d'alerte, profils.
+
+## Structure du dépôt
+
+```
+src/bridge/      pont température (SDK AMD) + outil de relevé des champs
+src/tools/       utilitaires de post-traitement de l'assembly
+installer/       script Inno Setup + install.ps1 / uninstall.ps1
+build/           reconstruction de l'installeur
+docs/            captures
+```
 
 ```powershell
 build\build-installer.ps1     # → dist\FPS-Counter-Crosshair-Pro-Setup.exe
 ```
 
-## Structure
-
-```
-src/patchers/    patchs IL (Mono.Cecil)
-src/bridge/      pont température (SDK AMD)
-installer/       script Inno Setup + install.ps1 / uninstall.ps1
-docs/            captures
-```
-
 ## Notes
 
-- Paquet de développement : nécessite le mode développeur (activé par l'installeur).
-- Dépend d'AMD Software (Platform.dll + AMDRyzenMasterDriverV32) pour la température CPU.
+- Compatible Windows 11 x64 (le paquet d'origine cible `Windows.Desktop 10.0.17763`).
+- Aucune collecte : les seuls accès réseau sont le store Microsoft (licence), Sentry (rapports
+  de plantage, désactivables) et l'écho ICMP du ping.
