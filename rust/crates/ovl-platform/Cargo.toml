@@ -1,0 +1,12 @@
+[package]
+name = "ovl-platform"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ovl-core = { path = "../ovl-core" }
+tray-icon.workspace = true
+global-hotkey.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+windows.workspace = true

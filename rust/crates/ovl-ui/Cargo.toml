@@ -1,0 +1,12 @@
+[package]
+name = "ovl-ui"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ovl-core = { path = "../ovl-core" }
+ovl-overlay = { path = "../ovl-overlay" }
+egui.workspace = true
+eframe.workspace = true
+serde.workspace = true
+serde_json.workspace = true

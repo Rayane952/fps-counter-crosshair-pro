@@ -1,0 +1,9 @@
+[package]
+name = "ovl-overlay"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ovl-core = { path = "../ovl-core" }
+windows.workspace = true
+log.workspace = true
