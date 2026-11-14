@@ -101,6 +101,15 @@ pub fn start_sensor() -> Result<(), String> {
     }
 }
 
+/// Page Windows « Barre des tâches », où l'on choisit les icônes visibles.
+pub fn open_taskbar_settings() -> Result<(), String> {
+    Command::new("explorer.exe")
+        .arg("ms-settings:taskbar")
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 pub fn open_folder(path: &std::path::Path) -> Result<(), String> {
     std::fs::create_dir_all(path).map_err(|e| e.to_string())?;
     Command::new("explorer.exe")

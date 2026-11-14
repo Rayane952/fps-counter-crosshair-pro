@@ -118,6 +118,11 @@ fn main() {
     };
 
     let _tray = ovl_platform::tray::create();
+    // l'icône peut être refusée au premier essai : réessayée à chaque tick jusqu'au succès
+    let mut tray_ok = ovl_platform::tray::ensure_icon();
+    if !tray_ok {
+        log_line("icône de notification refusée au démarrage, nouvelle tentative chaque seconde");
+    }
     let hotkey_ok = hotkeys::install();
     if !hotkey_ok {
         log_line("raccourci Alt+Maj+O déjà utilisé par une autre application");
@@ -162,6 +167,13 @@ fn main() {
 
         if force || last_tick.elapsed() >= TICK {
             last_tick = Instant::now();
+            // sans effet si l'icône est en place ; la rajoute sinon (aussi après un échec au
+            // redémarrage de l'Explorateur)
+            let icon_now = ovl_platform::tray::ensure_icon();
+            if icon_now && !tray_ok {
+                log_line("icône de notification ajoutée après une nouvelle tentative");
+            }
+            tray_ok = icon_now;
             // les réglages écrivent le fichier : relu à chaque tick (quelques centaines d'octets)
             config = Config::load();
             let wanted = config.wanted();

@@ -59,6 +59,7 @@ impl App {
 
         let mut autostart = self.autostart;
         let mut autostart_changed = false;
+        let mut open_taskbar = false;
         section(ui, "Démarrage", |ui| {
             row(
                 ui,
@@ -84,7 +85,24 @@ impl App {
                 0.0,
                 |_| {},
             );
+            divider(ui);
+            row(
+                ui,
+                "Icône sur la barre des tâches",
+                Some(RichText::new(
+                    "Windows 11 range les nouvelles icônes dans le menu caché (^). Pour garder \
+                     FPS Overlay visible : Autres icônes de la barre d'état système › FPS Overlay.",
+                )),
+                190.0,
+                |ui| open_taskbar = ui.button("Ouvrir le réglage Windows").clicked(),
+            );
         });
+        if open_taskbar {
+            self.report(
+                live::open_taskbar_settings(),
+                "Paramètres de la barre des tâches ouverts.",
+            );
+        }
         if autostart_changed {
             let message = if autostart {
                 "Lancement au démarrage activé."

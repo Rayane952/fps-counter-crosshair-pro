@@ -3,7 +3,8 @@
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
+    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
+    NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
@@ -62,7 +63,28 @@ unsafe fn add_icon(hwnd: HWND) -> bool {
     data.hIcon = icon;
     let tip: Vec<u16> = "FPS Overlay\0".encode_utf16().collect();
     data.szTip[..tip.len()].copy_from_slice(&tip);
-    Shell_NotifyIconW(NIM_ADD, &data).as_bool()
+    if Shell_NotifyIconW(NIM_ADD, &data).as_bool() {
+        return true;
+    }
+    // Shell_NotifyIcon peut échouer par délai dépassé tout en ayant ajouté l'icône (Explorateur
+    // occupé, ouverture de session) : si une mise à jour réussit, l'icône est bien là
+    Shell_NotifyIconW(NIM_MODIFY, &data).as_bool()
+}
+
+/// Réessaie d'ajouter l'icône tant qu'elle n'est pas en place. À appeler régulièrement :
+/// au démarrage de Windows, la zone de notification peut ne pas être encore prête.
+/// Renvoie vrai si l'icône est présente.
+pub fn ensure_icon() -> bool {
+    unsafe {
+        match state() {
+            Some(state) if !state.icon_added => {
+                state.icon_added = add_icon(state.hwnd);
+                state.icon_added
+            }
+            Some(_) => true,
+            None => false,
+        }
+    }
 }
 
 /// Crée la fenêtre cachée qui reçoit les clics de l'icône.
