@@ -13,11 +13,11 @@ use windows::Win32::UI::HiDpi::{
     MDT_EFFECTIVE_DPI,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetForegroundWindow, PeekMessageW,
-    RegisterClassW, SetWindowPos, ShowWindow, TranslateMessage, UpdateLayeredWindow, HWND_TOPMOST,
-    MSG, PM_REMOVE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOWNOACTIVATE, ULW_ALPHA,
-    WM_HOTKEY, WM_QUIT, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_EX_TRANSPARENT, WS_POPUP,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetForegroundWindow, GetWindowLongW,
+    PeekMessageW, RegisterClassW, SetWindowPos, ShowWindow, TranslateMessage, UpdateLayeredWindow,
+    GWL_EXSTYLE, HWND_NOTOPMOST, HWND_TOPMOST, MSG, PM_REMOVE, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOSIZE, SW_HIDE, SW_SHOWNOACTIVATE, ULW_ALPHA, WM_HOTKEY, WM_QUIT, WNDCLASSW,
+    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 use crate::painter::{Renderer, Scene};
@@ -65,12 +65,20 @@ struct Layer {
     hwnd: HWND,
     renderer: Option<Renderer>,
     visible: bool,
+    /// Échec de passage au premier plan déjà signalé.
+    warned: bool,
 }
 
 impl Layer {
     fn create(class: PCWSTR, title: PCWSTR) -> Option<Self> {
         unsafe {
-            let ex_style = WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+            // topmost dès la création : un SetWindowPos(HWND_TOPMOST) ultérieur peut être ignoré
+            // par Windows (constaté : le HUD restait sous un jeu plein écran fenêtré)
+            let ex_style = WS_EX_LAYERED
+                | WS_EX_TRANSPARENT
+                | WS_EX_TOOLWINDOW
+                | WS_EX_NOACTIVATE
+                | WS_EX_TOPMOST;
             match CreateWindowExW(
                 ex_style, class, title, WS_POPUP, 0, 0, 1, 1, None, None, None, None,
             ) {
@@ -78,6 +86,7 @@ impl Layer {
                     hwnd,
                     renderer: None,
                     visible: false,
+                    warned: false,
                 }),
                 Err(err) => {
                     log::error!("CreateWindowExW: {err}");
@@ -141,15 +150,17 @@ impl Layer {
                 self.visible = true;
             }
             // un jeu plein écran peut repasser devant : on réaffirme le premier plan à chaque rendu
-            let _ = SetWindowPos(
-                self.hwnd,
-                HWND_TOPMOST,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-            );
+            let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+            let topmost = |hwnd| GetWindowLongW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0 != 0;
+            if !topmost(self.hwnd) {
+                // drapeau perdu : Windows n'accepte de le reposer qu'après un passage en non-topmost
+                let _ = SetWindowPos(self.hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, flags);
+            }
+            let _ = SetWindowPos(self.hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags);
+            if !topmost(self.hwnd) && !self.warned {
+                self.warned = true;
+                log::warn!("le HUD n'a pas pu passer au premier plan (topmost)");
+            }
         }
     }
 

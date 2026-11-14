@@ -3,6 +3,7 @@
 pub mod alerts;
 pub mod amd;
 pub mod cpu;
+pub mod detect;
 pub mod frames;
 pub mod games;
 pub mod gpu;

@@ -5,6 +5,7 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use ovl_core::detect::{Source, Verdict};
 use ovl_core::frames::{Reading as Frames, Status as FrameStatus};
 use ovl_core::net::{traffic, Reading as Net};
 use serde::{Deserialize, Serialize};
@@ -31,10 +32,25 @@ pub struct OverlayStatus {
     pub foreground: Option<String>,
     pub net: Option<Net>,
     pub traffic: Option<traffic::Reading>,
+    /// Derniers programmes passés au premier plan (hors overlay et bureau), le plus récent d'abord.
+    pub recent: Vec<DetectionReport>,
+    /// Bibliothèques de jeux trouvées : (source, nombre).
+    pub library: Vec<(Source, usize)>,
     /// Derniers temps d'image (ms), seulement en disposition Graphique, pour l'aperçu.
     pub graph: Vec<f32>,
     /// Secondes depuis l'époque Unix.
     pub updated: u64,
+}
+
+/// Ce que la détection pense d'un programme, pour l'expliquer dans les réglages.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DetectionReport {
+    /// Nom sans « .exe ».
+    pub name: String,
+    pub path: String,
+    pub verdict: Verdict,
+    /// FPS mesurés au moment du verdict.
+    pub fps: Option<f32>,
 }
 
 fn now() -> u64 {

@@ -6,6 +6,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use ovl_core::alerts::{self, Engine};
+use ovl_core::detect::{self, Detector};
 use ovl_core::frames::{self, Status as FrameStatus};
 use ovl_core::games::GameProbe;
 use ovl_core::hud::{self, Layout};
@@ -13,18 +14,19 @@ use ovl_core::net;
 use ovl_core::stat::{Stat, Wanted};
 use ovl_core::{Sampler, Stats};
 use ovl_overlay::{HudSettings, Overlay};
+use ovl_platform::status::DetectionReport;
 use ovl_platform::{hotkeys, single_instance, Config, OverlayStatus};
 use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
 use windows::Win32::System::Threading::GetCurrentProcess;
 
-/// Seuil d'utilisation du moteur 3D par le processus au premier plan pour le considérer comme un jeu.
-const GAME_3D_THRESHOLD: f32 = 3.0;
 /// Mesures, alertes, état publié.
 const TICK: Duration = Duration::from_millis(1000);
 /// Rendu : courbe des temps d'image et clignotement d'alerte.
 const FRAME: Duration = Duration::from_millis(250);
 /// Une session ETW en échec est réessayée à ce rythme.
 const ETW_RETRY: Duration = Duration::from_secs(30);
+/// Programmes récents proposés dans les réglages pour une règle.
+const RECENT_PROGRAMS: usize = 6;
 /// Largeur maximale de la courbe, en images.
 const GRAPH_SAMPLES: usize = 600;
 
@@ -78,31 +80,26 @@ struct Sources {
 
 impl Sources {
     fn update(&mut self, wanted: &Wanted, config: &Config) -> Option<FrameStatus> {
-        let need_frames =
-            wanted.any(&[Stat::Fps, Stat::FrameTime, Stat::Lows]) || config.layout == Layout::Graph;
-        let need_traffic = wanted.has(Stat::BgTraffic);
-        let mut status = None;
-        if need_frames || need_traffic {
-            let current = frames::status();
-            let retry = self.etw_tried.map_or(true, |t| t.elapsed() >= ETW_RETRY);
-            status = Some(if current != FrameStatus::Running && retry {
-                self.etw_tried = Some(Instant::now());
-                let s = frames::start();
-                if s != FrameStatus::Running {
-                    log_line(&format!("session ETW des images : {s:?}"));
-                }
-                s
-            } else {
-                current
-            });
-            frames::set_network(need_traffic);
-        }
+        // la capture des images sert aussi à la détection des jeux : toujours active
+        let current = frames::status();
+        let retry = self.etw_tried.map_or(true, |t| t.elapsed() >= ETW_RETRY);
+        let status = if current != FrameStatus::Running && retry {
+            self.etw_tried = Some(Instant::now());
+            let s = frames::start();
+            if s != FrameStatus::Running {
+                log_line(&format!("session ETW des images : {s:?}"));
+            }
+            s
+        } else {
+            current
+        };
+        frames::set_network(wanted.has(Stat::BgTraffic));
         net::want(
             wanted.any(&[Stat::Ping, Stat::PacketLoss]),
             wanted.has(Stat::Connection),
             &config.ping_host,
         );
-        status
+        Some(status)
     }
 }
 
@@ -129,6 +126,8 @@ fn main() {
     let mut sampler = Sampler::new();
     let mut game_probe = GameProbe::new();
     let mut sources = Sources { etw_tried: None };
+    let mut detector = Detector::new();
+    let mut recent: Vec<DetectionReport> = Vec::new();
     let mut engine = Engine::default();
 
     let mut config = Config::load();
@@ -168,15 +167,34 @@ fn main() {
             let wanted = config.wanted();
             let frame_status = sources.update(&wanted, &config);
 
-            pid = ovl_core::games::foreground_pid();
+            let fg = detect::foreground();
+            pid = fg.pid;
+            frames_now = frames::read(pid);
             let usage = game_probe.as_mut().map(|p| p.usage(pid)).unwrap_or(0.0);
-            in_game = usage >= GAME_3D_THRESHOLD;
+            let rendering = frames_now.is_some_and(|f| f.fps >= detect::RENDER_MIN_FPS)
+                || usage >= detect::RENDER_MIN_3D;
+            let verdict = detector.update(&fg, rendering, &config.game_rules);
+            in_game = verdict.game;
+            // les réglages listent les programmes récents (pas eux-mêmes, pas le bureau), pour qu'on
+            // puisse corriger le jeu même après être passé sur un navigateur avant de les ouvrir
+            if verdict.reason != detect::Reason::Ignored && !fg.path.is_empty() {
+                recent.retain(|r| !r.path.eq_ignore_ascii_case(&fg.path));
+                recent.insert(
+                    0,
+                    DetectionReport {
+                        name: fg.name.clone(),
+                        path: fg.path.clone(),
+                        verdict,
+                        fps: frames_now.map(|f| f.fps),
+                    },
+                );
+                recent.truncate(RECENT_PROGRAMS);
+            }
 
             let active = config.show_stats && (in_game || config.always_show);
             if active || !config.alerts.needs().is_empty() {
                 stats = sampler.sample(&wanted, pid);
             }
-            frames_now = frames::read(pid);
             traffic = wanted.has(Stat::BgTraffic).then(|| net::traffic::take(pid));
             net_now = net::reading();
 
@@ -201,6 +219,8 @@ fn main() {
                 frames_status: frame_status,
                 frames: frames_now,
                 foreground: (pid != 0).then(|| ovl_core::games::process_name(pid)),
+                recent: recent.clone(),
+                library: detector.library().summary(),
                 net: Some(net_now.clone()),
                 traffic: traffic.clone(),
                 graph: if config.layout == Layout::Graph {

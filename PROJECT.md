@@ -103,10 +103,21 @@ Binaires secondaires : `probe.exe` (dump JSON des stats), `sensor.exe` (capteur 
 
 ## 3. Ce que fait l'application Rust aujourd'hui
 
-- **HUD** click-through, topmost, sans vol de focus, sur le moniteur de la fenêtre active, dans le
-  coin choisi. Affiché **uniquement si un jeu rend réellement en 3D** au premier plan
-  (compteurs `\GPU Engine(*)\engtype_3d` du PID, seuil 3 %), ou en permanence (« Afficher hors jeu »).
-  Taille × échelle Windows du moniteur appliquées à la fenêtre et aux polices.
+- **HUD** click-through, topmost (dès la création), sans vol de focus, sur le moniteur de la fenêtre
+  active, dans le coin choisi. Taille × échelle Windows du moniteur appliquées à la fenêtre et aux polices.
+- **Détection des jeux** (`ovl-core::detect`) : le HUD n'apparaît que lorsqu'un jeu est au premier plan
+  (ou partout avec « Afficher hors jeu »). Ordre de décision :
+  1. règle de l'utilisateur pour l'exécutable (« toujours » / « jamais ») ;
+  2. jeu reconnu : liste des jeux de Windows (`HKCU\System\GameConfigStore\Children`,
+     `MatchedExeFullPath`) ou dossier de bibliothèque (Steam via `libraryfolders.vdf`, manifestes Epic,
+     GOG via le registre, `XboxGames`, `Riot Games`, EA, Ubisoft, Battle.net, `X:\Games`) **et** rendu actif
+     (FPS ETW ≥ 15 ou moteur 3D ≥ 3 %) : un lanceur dessiné par un autre processus ne déclenche rien ;
+  3. inconnu : plein écran (fenêtre couvrant le moniteur ou `SHQueryUserNotificationState`) **et** rendu
+     actif, hors navigateurs, lecteurs vidéo, messageries, outils de capture.
+
+  2 s de détection continue avant l'affichage ; un jeu confirmé le reste tant que son processus vit
+  (écrans de chargement). Les réglages listent les 6 derniers programmes avec leur verdict et des
+  boutons « Toujours / Ne jamais afficher ». Aucune injection : compatible anti-triche.
 - **Rendu** : alpha par pixel (`UpdateLayeredWindow`) : fond à l'opacité choisie, texte opaque,
   thème Transparent avec ombre.
 - **Dispositions** : Panneau, Ligne, Graphique (panneau + courbe des temps d'image).

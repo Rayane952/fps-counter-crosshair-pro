@@ -109,6 +109,7 @@ impl App {
         ui.add_space(20.0);
 
         self.display_section(ui, snap);
+        self.detection_section(ui, snap);
         self.theme_section(ui, rows.as_deref().unwrap_or(&[]));
         self.stats_sections(ui);
         self.position_section(ui);

@@ -13,6 +13,17 @@ fn main() {
         .unwrap_or(5);
     let host = std::env::args().nth(2).unwrap_or_else(|| "1.1.1.1".into());
 
+    let library = ovl_core::detect::Library::load();
+    println!("bibliothèques: {:?}", library.summary());
+    for exe in [
+        r"D:\Riot Games\VALORANT\live\ShooterGame\Binaries\Win64\VALORANT-Win64-Shipping.exe",
+        r"D:\SteamLibrary\steamapps\common\Deadlock\game\bin\win64\deadlock.exe",
+        r"C:\Program Files\Epic Games\Fortnite\FortniteGame\Binaries\Win64\FortniteClient-Win64-Shipping.exe",
+        r"D:\World of Warcraft\_forever_\Wow.exe",
+        r"C:\Windows\System32\notepad.exe",
+    ] {
+        println!("  {:?} <- {exe}", library.classify(exe));
+    }
     println!("etw étapes: {}", frames::diagnose());
     println!(
         "connexion WinRT: {:?}",

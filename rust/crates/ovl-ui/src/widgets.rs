@@ -273,9 +273,12 @@ pub fn segmented<T: PartialEq + Copy>(
 }
 
 /// Groupe de réglages : un titre puis une surface unique, lignes séparées par un filet.
+/// Titre vide : la surface seule (quand le titre et une introduction sont posés avant).
 pub fn section<R>(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
-    ui.label(RichText::new(title).font(font_semibold(15.0)));
-    ui.add_space(2.0);
+    if !title.is_empty() {
+        ui.label(RichText::new(title).font(font_semibold(15.0)));
+        ui.add_space(2.0);
+    }
     let inner = egui::Frame::none()
         .fill(SURFACE)
         .rounding(Rounding::same(RADIUS))

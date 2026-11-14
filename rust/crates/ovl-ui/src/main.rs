@@ -4,6 +4,7 @@
 
 mod live;
 mod page_alerts;
+mod page_detection;
 mod page_overlay;
 mod pages;
 mod preview;
@@ -98,7 +99,8 @@ impl App {
                 theme,
                 text_color,
                 ping_host,
-                alerts
+                alerts,
+                game_rules
             );
         });
         match result {

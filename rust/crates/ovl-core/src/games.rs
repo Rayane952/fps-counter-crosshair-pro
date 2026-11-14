@@ -17,19 +17,20 @@ pub fn foreground_pid() -> u32 {
     }
 }
 
-/// Nom de l'exécutable d'un processus, sans « .exe » (« PID n » s'il est inaccessible).
-pub fn process_name(pid: u32) -> String {
+/// Chemin complet de l'exécutable d'un processus ; `None` s'il n'existe plus ou est inaccessible.
+pub fn process_path(pid: u32) -> Option<String> {
     use windows::core::PWSTR;
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Threading::{
         OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
         PROCESS_QUERY_LIMITED_INFORMATION,
     };
+    if pid == 0 {
+        return None;
+    }
     unsafe {
-        let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
-            return format!("PID {pid}");
-        };
-        let mut buffer = [0u16; 260];
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buffer = [0u16; 1024];
         let mut len = buffer.len() as u32;
         let ok = QueryFullProcessImageNameW(
             handle,
@@ -39,17 +40,20 @@ pub fn process_name(pid: u32) -> String {
         )
         .is_ok();
         let _ = CloseHandle(handle);
-        if !ok {
-            return format!("PID {pid}");
-        }
-        let path = String::from_utf16_lossy(&buffer[..len as usize]);
-        let file = path.rsplit('\\').next().unwrap_or(&path);
-        let lower = file.to_ascii_lowercase();
-        if lower.ends_with(".exe") {
-            file[..file.len() - 4].to_owned()
-        } else {
-            file.to_owned()
-        }
+        ok.then(|| String::from_utf16_lossy(&buffer[..len as usize]))
+    }
+}
+
+/// Nom de l'exécutable d'un processus, sans « .exe » (« PID n » s'il est inaccessible).
+pub fn process_name(pid: u32) -> String {
+    let Some(path) = process_path(pid) else {
+        return format!("PID {pid}");
+    };
+    let file = path.rsplit('\\').next().unwrap_or(&path);
+    if file.to_ascii_lowercase().ends_with(".exe") {
+        file[..file.len() - 4].to_owned()
+    } else {
+        file.to_owned()
     }
 }
 

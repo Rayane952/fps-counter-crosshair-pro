@@ -8,6 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use ovl_core::alerts;
+use ovl_core::detect::Rule;
 use ovl_core::hud::{parse_color, Corner, Layout, ThemeId};
 use ovl_core::stat::{Stat, Wanted};
 use serde::{Deserialize, Serialize};
@@ -51,6 +52,8 @@ pub struct Config {
     /// Hôte du ping et de la perte de paquets.
     pub ping_host: String,
     pub alerts: alerts::Settings,
+    /// Règles par exécutable : afficher toujours / jamais, quelle que soit la détection.
+    pub game_rules: Vec<Rule>,
 }
 
 impl Default for Config {
@@ -70,6 +73,7 @@ impl Default for Config {
             text_color: None,
             ping_host: DEFAULT_PING_HOST.to_owned(),
             alerts: alerts::Settings::default(),
+            game_rules: Vec::new(),
         }
     }
 }
