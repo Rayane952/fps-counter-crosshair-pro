@@ -114,7 +114,8 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             let event = lp.0 as u32;
             match event {
                 windows::Win32::UI::WindowsAndMessaging::WM_RBUTTONUP => show_menu(hwnd),
-                windows::Win32::UI::WindowsAndMessaging::WM_LBUTTONDBLCLK => open_settings(),
+                windows::Win32::UI::WindowsAndMessaging::WM_LBUTTONUP
+                | windows::Win32::UI::WindowsAndMessaging::WM_LBUTTONDBLCLK => open_settings(),
                 _ => {}
             }
             LRESULT(0)

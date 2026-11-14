@@ -1,3 +1,4 @@
+#![windows_subsystem = "windows"]
 //! Point d'entrée : icône de notification, réglages, overlay affiché en jeu.
 
 use std::thread;
@@ -14,10 +15,13 @@ fn main() {
     let mut overlay = match Overlay::create(OverlayConfig::default()) {
         Some(overlay) => overlay,
         None => {
-            log::error!("impossible de créer la fenêtre d'overlay");
+            let _ = std::fs::write(r"C:ProgramDataOverlayTempust_overlay.log", "create failed
+");
             return;
         }
     };
+    let _ = std::fs::write(r"C:ProgramDataOverlayTempust_overlay.log", "create ok
+");
     overlay.hide();
 
     let _tray = ovl_platform::tray::create();

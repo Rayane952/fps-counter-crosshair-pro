@@ -11,7 +11,7 @@ use windows::Win32::UI::HiDpi::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetForegroundWindow, GetMessageW,
     PeekMessageW, RegisterClassW, SetLayeredWindowAttributes, SetWindowPos, ShowWindow,
-    TranslateMessage, CS_HREDRAW, CS_VREDRAW, HWND_TOPMOST, LWA_COLORKEY, MSG, PM_REMOVE,
+    TranslateMessage, CS_HREDRAW, CS_VREDRAW, HWND_TOPMOST, LWA_ALPHA, MSG, PM_REMOVE,
     SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOW, WM_QUIT, WNDCLASSW, WS_EX_LAYERED,
     WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP,
 };
@@ -33,10 +33,13 @@ impl Default for OverlayConfig {
     }
 }
 
+static mut CTX: *mut PaintCtx = std::ptr::null_mut();
+static mut ROWS: Option<Vec<(String, String)>> = None;
+
 pub struct Overlay {
     hwnd: HWND,
-    ctx: PaintCtx,
     config: OverlayConfig,
+    last_pos: Option<(i32, i32, i32, i32)>,
 }
 
 impl Overlay {
@@ -45,10 +48,14 @@ impl Overlay {
             let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
             let class_name = w!("KoykOverlayRust");
+            // fond noir = couleur transparente (color key), dès la création
+            let black: windows::Win32::Graphics::Gdi::HBRUSH =
+                windows::Win32::Graphics::Gdi::CreateSolidBrush(COLORREF(0));
             let wc = WNDCLASSW {
                 style: CS_HREDRAW | CS_VREDRAW,
                 lpfnWndProc: Some(wndproc),
                 lpszClassName: class_name,
+                hbrBackground: black,
                 ..Default::default()
             };
             RegisterClassW(&wc);
@@ -65,12 +72,16 @@ impl Overlay {
                 }
             };
 
-            let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 0, LWA_COLORKEY);
+            // panneau translucide : lisibilité garantie sur tous les fonds
+            let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 205, LWA_ALPHA);
             let _ = ShowWindow(hwnd, SW_SHOW);
             let _ = UpdateWindow(hwnd);
 
             let ctx = PaintCtx::new(hwnd, config.scale)?;
-            Some(Self { hwnd, ctx, config })
+            unsafe {
+                CTX = Box::into_raw(Box::new(ctx));
+            }
+            Some(Self { hwnd, config, last_pos: None })
         }
     }
 
@@ -91,13 +102,28 @@ impl Overlay {
                 let m = (self.config.margin as f32 * dpi) as i32;
                 let x = rect.right - w - m;
                 let y = rect.top + m;
-                let _ = SetWindowPos(self.hwnd, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                let target = (x, y, w, h);
+                // ne pas repositionner si rien ne change : sinon la fenêtre est
+                // réinitialisée (fond noir) juste après la peinture
+                if self.last_pos != Some(target) {
+                    self.last_pos = Some(target);
+                    let _ = SetWindowPos(self.hwnd, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                }
             }
         }
     }
 
     pub fn paint(&mut self, lines: &[(String, String)]) {
-        self.ctx.paint(lines);
+        unsafe {
+            // peinture directe : sur une fenêtre layered, WM_PAINT ne reçoit pas de surface utile
+            let hdc = windows::Win32::Graphics::Gdi::GetDC(self.hwnd);
+            if !hdc.is_invalid() {
+                if !CTX.is_null() {
+                    (*CTX).paint_dc(hdc, lines);
+                }
+                windows::Win32::Graphics::Gdi::ReleaseDC(self.hwnd, hdc);
+            }
+        }
     }
 
     /// Change l'échelle du panneau (reconstruit les polices).
@@ -107,7 +133,12 @@ impl Overlay {
         }
         self.config.scale = scale;
         if let Some(ctx) = PaintCtx::new(self.hwnd, scale) {
-            self.ctx = ctx;
+            unsafe {
+                if !CTX.is_null() {
+                    drop(Box::from_raw(CTX));
+                }
+                CTX = Box::into_raw(Box::new(ctx));
+            }
         }
     }
 
@@ -146,9 +177,15 @@ impl Overlay {
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
-    let _ = (hwnd, wp, lp);
     match msg {
-        windows::Win32::UI::WindowsAndMessaging::WM_PAINT => LRESULT(0),
+        windows::Win32::UI::WindowsAndMessaging::WM_PAINT => {
+            use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, PAINTSTRUCT};
+            let mut ps = PAINTSTRUCT::default();
+            let _hdc = BeginPaint(hwnd, &mut ps);
+            let _ = EndPaint(hwnd, &ps);
+            LRESULT(0)
+        }
+        windows::Win32::UI::WindowsAndMessaging::WM_ERASEBKGND => LRESULT(1),
         _ => DefWindowProcW(hwnd, msg, wp, lp),
     }
 }

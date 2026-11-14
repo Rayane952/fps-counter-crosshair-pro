@@ -1,3 +1,4 @@
+#![windows_subsystem = "windows"]
 //! Capteur élevé : publie la température CPU (SDK AMD) dans un fichier lu par l'overlay.
 //!
 //! GetRmCpuParameters exige un processus élevé ; l'overlay tourne volontairement en

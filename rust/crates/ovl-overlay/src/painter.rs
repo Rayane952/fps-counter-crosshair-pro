@@ -73,14 +73,9 @@ impl PaintCtx {
         }
     }
 
-    /// Peint les lignes (label, valeur) sur deux colonnes.
-    pub fn paint(&mut self, lines: &[(String, String)]) {
+    /// Peint sur un DC fourni (WM_PAINT).
+    pub fn paint_dc(&mut self, hdc: HDC, lines: &[(String, String)]) {
         unsafe {
-            let hdc: HDC = GetDC(self.hwnd);
-            if hdc.is_invalid() {
-                return;
-            }
-
             let mut rect = RECT { left: 0, top: 0, right: 400, bottom: 300 };
             let _ = GetClientRect(self.hwnd, &mut rect);
             FillRect(hdc, &rect, self.brush_bg);
@@ -108,7 +103,6 @@ impl PaintCtx {
                 y += row_h;
             }
 
-            ReleaseDC(self.hwnd, hdc);
         }
     }
 }
